@@ -5,6 +5,25 @@
 import { THEME, ansiColor } from "./palette";
 import type { TermSnapshot } from "@container/nanovm.mjs";
 
+/**
+ * The contract shared by every renderer backend (throwaway 2D canvas, WebGPU).
+ * `main.ts` is written against this so it can pick a backend at runtime and
+ * fall back gracefully when WebGPU is unavailable.
+ */
+export interface TermRenderer {
+  /** Cell metrics in CSS px — used to size the grid / compute cols×rows. */
+  readonly cellW: number;
+  readonly cellH: number;
+  /** Re-measure cell metrics against the current font (call after font load). */
+  measure(): void;
+  /** Resize the backing surface to a cols×rows grid. */
+  resize(cols: number, rows: number): void;
+  /** Paint one frame from a terminal snapshot; `cursorOn` is the blink phase. */
+  draw(s: TermSnapshot, cursorOn: boolean): void;
+  /** Release GPU/native resources, if any. */
+  destroy?(): void;
+}
+
 // Cell flag bits — must match src/term.rs in the nano repo.
 const FLAG_BOLD = 1 << 0;
 const FLAG_DIM = 1 << 1;
@@ -19,7 +38,7 @@ const FLAG_BG_DEFAULT = 1 << 6;
  * the Vello/WebGPU renderer in Phase 2 — kept deliberately simple (full redraw
  * per frame; the grid is tiny).
  */
-export class CanvasRenderer {
+export class CanvasRenderer implements TermRenderer {
   private ctx: CanvasRenderingContext2D;
   cellW = 0;
   cellH = 0;

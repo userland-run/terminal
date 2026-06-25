@@ -3,21 +3,31 @@
 // Part of the userland.run terminal; dual-licensed - see LICENSE.md.
 
 import { NanoVM } from "@container/nanovm.mjs";
-import { CanvasRenderer } from "./renderer";
+import { CanvasRenderer, type TermRenderer } from "./renderer";
+import { GpuRenderer } from "./gpu/renderer";
 
 const COLS = 80;
 const ROWS = 25;
+const FONT_PX = 15;
 
 async function main() {
   const canvas = document.getElementById("screen") as HTMLCanvasElement;
-  const renderer = new CanvasRenderer(canvas, 15);
 
   // Wait for JetBrains Mono so cell metrics are measured against the real font.
   try {
-    await document.fonts.load(`15px "JetBrains Mono"`);
-    await document.fonts.load(`700 15px "JetBrains Mono"`);
+    await document.fonts.load(`${FONT_PX}px "JetBrains Mono"`);
+    await document.fonts.load(`700 ${FONT_PX}px "JetBrains Mono"`);
   } catch {
     /* fall back to system monospace */
+  }
+
+  // Prefer the WebGPU renderer; fall back to the 2D canvas if it's unavailable.
+  let renderer: TermRenderer;
+  try {
+    renderer = await GpuRenderer.create(canvas, FONT_PX);
+  } catch (e) {
+    console.warn("[console] WebGPU unavailable — falling back to 2D canvas:", e);
+    renderer = new CanvasRenderer(canvas, FONT_PX);
   }
   renderer.measure();
   renderer.resize(COLS, ROWS);

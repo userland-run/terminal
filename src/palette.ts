@@ -32,3 +32,43 @@ export function ansiColor(idx: number): string {
   const v = 8 + (idx - 232) * 10;
   return `rgb(${v},${v},${v})`;
 }
+
+// ---------------------------------------------------------------------------
+// Numeric (float 0..1) colour API — used by the WebGPU renderer, which needs
+// linear vertex/instance attributes rather than CSS strings.
+// ---------------------------------------------------------------------------
+
+/** An rgb triple, each channel a 0..1 float (sRGB-encoded, as the canvas is). */
+export type Rgb = readonly [number, number, number];
+
+/** Parse `#rrggbb` (or `#rgb`) into a 0..1 float triple. */
+export function hexToRgb(hex: string): Rgb {
+  let h = hex.replace("#", "");
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const n = parseInt(h, 16);
+  return [((n >> 16) & 0xff) / 255, ((n >> 8) & 0xff) / 255, (n & 0xff) / 255];
+}
+
+/** Design tokens as float triples (ground, text, violet cursor). */
+export const THEME_RGB = {
+  bg: hexToRgb(THEME.bg),
+  fg: hexToRgb(THEME.fg),
+  cursor: hexToRgb(THEME.cursor),
+};
+
+const ANSI16_RGB: Rgb[] = ANSI16.map(hexToRgb);
+
+/** Resolve a 0–255 ANSI palette index to a 0..1 float triple. */
+export function ansiRgb(idx: number): Rgb {
+  if (idx < 16) return ANSI16_RGB[idx];
+  if (idx < 232) {
+    const n = idx - 16;
+    const r = Math.floor(n / 36);
+    const g = Math.floor((n % 36) / 6);
+    const b = n % 6;
+    const c = (v: number) => (v === 0 ? 0 : 55 + v * 40) / 255;
+    return [c(r), c(g), c(b)];
+  }
+  const v = (8 + (idx - 232) * 10) / 255;
+  return [v, v, v];
+}

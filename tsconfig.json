@@ -7,7 +7,7 @@
     "skipLibCheck": true,
     "noEmit": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": []
+    "types": ["@webgpu/types"]
   },
   "include": ["src"]
 }
