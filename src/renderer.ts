@@ -16,10 +16,14 @@ export interface TermRenderer {
   readonly cellH: number;
   /** Re-measure cell metrics against the current font (call after font load). */
   measure(): void;
+  /** Change the font size (px) and re-measure. */
+  setFontSize(px: number): void;
   /** Resize the backing surface to a cols×rows grid. */
   resize(cols: number, rows: number): void;
   /** Paint one frame from a terminal snapshot; `cursorOn` is the blink phase. */
   draw(s: TermSnapshot, cursorOn: boolean): void;
+  /** Set (or clear) the drag-selection highlight. Optional per backend. */
+  setSelection?(sel: import("./selection").Selection | null): void;
   /** Release GPU/native resources, if any. */
   destroy?(): void;
 }
@@ -54,6 +58,11 @@ export class CanvasRenderer implements TermRenderer {
     this.ctx.font = `${this.fontSize}px ${THEME.font}`;
     this.cellW = Math.max(1, Math.round(this.ctx.measureText("M").width));
     this.cellH = Math.round(this.fontSize * 1.4);
+  }
+
+  setFontSize(px: number) {
+    this.fontSize = px;
+    this.measure();
   }
 
   resize(cols: number, rows: number) {

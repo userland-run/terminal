@@ -3,8 +3,10 @@
 // Part of the userland.run terminal; dual-licensed - see LICENSE.md.
 
 import type { TermSnapshot } from "@container/nanovm.mjs";
-import { THEME, THEME_RGB, ansiRgb, type Rgb } from "../palette";
+import { THEME, THEME_RGB, ansiRgb, hexToRgb, type Rgb } from "../palette";
 import type { TermRenderer } from "../renderer";
+import type { Selection } from "../selection";
+import { ordered } from "../selection";
 import { requestGpu } from "./device";
 import { GlyphAtlas } from "./atlas";
 
@@ -90,6 +92,9 @@ const BLEND: GPUBlendState = {
   alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
 };
 
+// Selection highlight — a deep violet tint (token --primary-soft, dark).
+const SELECTION_RGB = hexToRgb("#39306b");
+
 function sameRgb(a: Rgb | null, b: Rgb | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
@@ -124,6 +129,8 @@ export class GpuRenderer implements TermRenderer {
   private glyphBuf!: GPUBuffer;
   private rectData = new Float32Array(0);
   private glyphData = new Float32Array(0);
+
+  private selection: Selection | null = null;
 
   // Damage tracking: skip the GPU entirely when nothing changed.
   private lastHash = -1;
@@ -247,6 +254,16 @@ export class GpuRenderer implements TermRenderer {
     this.updateUniforms();
   }
 
+  setFontSize(px: number) {
+    this.fontSize = px;
+    this.measure();
+  }
+
+  setSelection(sel: Selection | null) {
+    this.selection = sel;
+    this.lastHash = -1; // force a redraw to paint/clear the highlight
+  }
+
   resize(cols: number, rows: number) {
     this.cols = cols;
     this.rows = rows;
@@ -255,8 +272,9 @@ export class GpuRenderer implements TermRenderer {
     this.canvas.style.width = `${(cols * this.cellWdev) / this.dpr}px`;
     this.canvas.style.height = `${(rows * this.cellHdev) / this.dpr}px`;
 
-    // Worst case: every cell a 1-wide bg run + an underline, plus the cursor.
-    const rectCap = 2 * cols * rows + 1;
+    // Worst case: every cell a 1-wide bg run + an underline, one selection rect
+    // per row, plus the cursor.
+    const rectCap = 2 * cols * rows + rows + 1;
     const glyphCap = cols * rows + 1;
     this.rectData = new Float32Array(rectCap * FLOATS_PER_INSTANCE);
     this.glyphData = new Float32Array(glyphCap * FLOATS_PER_INSTANCE);
@@ -386,6 +404,26 @@ export class GpuRenderer implements TermRenderer {
         if (flags & FLAG_UNDERLINE) {
           ri = pushRect(rect, ri, x, y + cellHdev - underline, cellWdev, underline, fg, 1);
         }
+      }
+    }
+
+    // Selection highlight — one rect per selected row, drawn over the
+    // background and under the glyphs (so selected text stays readable).
+    if (this.selection) {
+      const { start, end } = ordered(this.selection);
+      for (let row = Math.max(0, start.row); row <= Math.min(rows - 1, end.row); row++) {
+        const cStart = row === start.row ? start.col : 0;
+        const cEnd = row === end.row ? end.col : cols - 1;
+        ri = pushRect(
+          rect,
+          ri,
+          cStart * cellWdev,
+          row * cellHdev,
+          (cEnd - cStart + 1) * cellWdev,
+          cellHdev,
+          SELECTION_RGB,
+          1
+        );
       }
     }
 

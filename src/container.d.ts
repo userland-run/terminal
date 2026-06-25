@@ -9,9 +9,14 @@ declare module "@container/nanovm.mjs" {
   export interface TermSnapshot {
     cols: number;
     rows: number;
+    /** Cursor row within the viewport, or -1 when scrolled off the live region. */
     cursorRow: number;
     cursorCol: number;
     cells: Uint8Array;
+    /** Scrollback lines scrolled up from the live bottom (0 = live). */
+    scrollOffset: number;
+    /** Maximum scroll offset available (scrollback depth). */
+    scrollMax: number;
   }
   export interface RunResult {
     exitCode: number;
@@ -26,7 +31,7 @@ declare module "@container/nanovm.mjs" {
     termInit(cols?: number, rows?: number): void;
     termResize(cols: number, rows: number): void;
     setTty(on?: boolean): void;
-    termSnapshot(): TermSnapshot | null;
+    termSnapshot(scrollOffset?: number): TermSnapshot | null;
     termEcho(data: Uint8Array | string): void;
     writeStdin(data: Uint8Array | string): void;
     setInteractiveStdin(on?: boolean): void;

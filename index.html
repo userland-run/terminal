@@ -6,21 +6,55 @@
     <title>Console — userland.run</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- JetBrains Mono = terminal grid; IBM Plex Sans = chrome (labels/sidebar). -->
     <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,700;1,400&display=swap"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,700;1,400&display=swap"
       rel="stylesheet"
     />
-    <style>
-      html, body { margin: 0; height: 100%; background: #18181b; color: #edecf3; }
-      #app { height: 100vh; display: flex; align-items: center; justify-content: center; }
-      canvas { background: #0e0e10; border: 1px solid #2c2c31; border-radius: 6px; }
-      #status { position: fixed; bottom: 8px; left: 12px; font: 11px "JetBrains Mono", monospace; color: #6c6c76; }
-      #status .run { color: #a984f5; }
-    </style>
   </head>
   <body>
-    <div id="app"><canvas id="screen"></canvas></div>
-    <div id="status">userland<span class="run">.run</span> · Console (Phase 2 · WebGPU)</div>
+    <div id="app">
+      <header id="topbar">
+        <div class="brand">userland<span class="dot">.run</span><span class="sep">·</span><span class="app">Console</span></div>
+        <button id="sidebar-toggle" class="ghost-btn" title="Toggle sidebar (⌘B)" aria-label="Toggle sidebar">☰</button>
+        <div class="spacer"></div>
+        <button class="hints" id="palette-open" title="Command palette (⌘K)"><kbd>⌘K</kbd> palette</button>
+      </header>
+
+      <aside id="sidebar">
+        <section class="panel">
+          <div class="panel-label">Sessions</div>
+          <ul id="sessions" class="list">
+            <li class="row active"><span class="dotmark"></span>sh<span class="row-meta" id="session-state">booting…</span></li>
+          </ul>
+        </section>
+        <section class="panel">
+          <div class="panel-label">Files</div>
+          <div id="files" class="muted-note">cwd <code id="cwd">/</code></div>
+        </section>
+      </aside>
+
+      <main id="terminal-area">
+        <canvas id="screen"></canvas>
+      </main>
+
+      <footer id="footer">
+        <span class="stat" id="stat-grid">—</span>
+        <span class="stat" id="stat-cursor">—</span>
+        <div class="spacer"></div>
+        <span class="stat" id="stat-renderer">—</span>
+        <span class="stat run" id="stat-status">·</span>
+      </footer>
+    </div>
+
+    <!-- Cmd-K command palette (hidden until invoked). -->
+    <div id="palette-overlay" hidden>
+      <div id="palette" role="dialog" aria-label="Command palette">
+        <input id="palette-input" type="text" placeholder="Type a command…" autocomplete="off" spellcheck="false" />
+        <ul id="palette-list"></ul>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
