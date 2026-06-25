@@ -17,7 +17,7 @@ import {
   type Selection,
 } from "./selection";
 
-const DEFAULT_FONT_PX = 15;
+const DEFAULT_FONT_PX = 12; // matches the style-guide comp's terminal text scale
 const MIN_FONT_PX = 9;
 const MAX_FONT_PX = 28;
 const MAX_COLS = 200; // must match src/term.rs MAX_COLS
@@ -70,7 +70,18 @@ async function main() {
   vm.termInit(cols, rows);
   vm.setTty(true); // real guest tty: isatty=true, in-VM echo + line discipline
   chrome.setSession("running");
-  chrome.setStatus("● live");
+  chrome.setStatus("live");
+  chrome.setCwd("/");
+
+  // Live uptime in the footer (the one stat we can source honestly client-side;
+  // MIPS/heap/proc need VM introspection the host doesn't yet expose).
+  const bootedAt = Date.now();
+  const fmtUptime = (ms: number) => {
+    const s = Math.floor(ms / 1000);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${p(Math.floor(s / 3600))}:${p(Math.floor((s % 3600) / 60))}:${p(s % 60)}`;
+  };
+  setInterval(() => chrome.setUptime(fmtUptime(Date.now() - bootedAt)), 1000);
 
   // Re-fit the grid to the pane (and the guest, via SIGWINCH). `force` resizes
   // the surface even when cols×rows is unchanged (after a font-size change).
@@ -127,7 +138,7 @@ async function main() {
       }
       if (scrollOffset !== lastShownOffset) {
         lastShownOffset = scrollOffset;
-        chrome.setStatus(scrollOffset > 0 ? `↑ ${scrollOffset}/${snap.scrollMax}` : "● live");
+        chrome.setStatus(scrollOffset > 0 ? `↑ ${scrollOffset}/${snap.scrollMax}` : "live");
       }
       a11y.update(snap, Date.now());
     }
@@ -180,7 +191,7 @@ async function main() {
     try {
       await navigator.clipboard.writeText(text);
       chrome.setStatus("copied");
-      setTimeout(() => chrome.setStatus("● live"), 1200);
+      setTimeout(() => chrome.setStatus("live"), 1200);
     } catch (err) {
       console.warn("[console] clipboard write failed:", err);
     }
@@ -209,7 +220,14 @@ async function main() {
     { id: "font-reset", title: "Reset font size", hint: "⌘0", run: () => setFont(DEFAULT_FONT_PX) },
     { id: "sidebar", title: "Toggle sidebar", hint: "⌘B", run: toggleSidebar },
   ]);
-  document.getElementById("palette-open")?.addEventListener("click", () => palette.show());
+
+  // Top-bar ⊘/⟳/⚙ + settings-popover rows. Restart fully re-creates the VM by
+  // reloading — the honest "reboot" until the host exposes a soft reset.
+  chrome.bindActions({
+    onClear: () => vm.writeStdin("clear\r"),
+    onRestart: () => location.reload(),
+    onPalette: () => palette.show(),
+  });
 
   // — input —
   window.addEventListener("keydown", (e) => {
@@ -270,7 +288,7 @@ async function main() {
   vm.run("sh -i", { maxSteps: 5_000_000_000 }).then((r) => {
     vm.termEcho(`\r\n[shell exited: ${r.exitCode}]\r\n`);
     chrome.setSession(`exited ${r.exitCode}`);
-    chrome.setStatus("○ done");
+    chrome.setStatus("done");
   });
 }
 

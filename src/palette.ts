@@ -6,16 +6,18 @@
 // All monospace is JetBrains Mono — no IBM Plex Mono anywhere.
 
 export const THEME = {
-  bg: "#0E0E10", // terminal pane ground ("field")
+  bg: "#15151A", // terminal pane = the comp's window surface (--surface)
   fg: "#EDECF3", // primary text
   cursor: "#A984F5", // violet primary
   font: '"JetBrains Mono", ui-monospace, SFMono-Regular, monospace',
 };
 
 // 16 base ANSI colours, tuned for the dark theme. Indices 0–7 normal, 8–15 bright.
+// "Blue" (4/12) is mapped to the userland violet so directory listings etc. read
+// in-brand instead of blue.
 const ANSI16 = [
-  "#1c1c20", "#f0616d", "#57b87a", "#d39a3e", "#6c8cff", "#a984f5", "#3fb6b2", "#9b9ba4",
-  "#3a3a42", "#ff7b86", "#74d493", "#e6b45a", "#8aa6ff", "#c4b6f2", "#5fd6d1", "#edecf3",
+  "#1c1c20", "#f0616d", "#57b87a", "#d39a3e", "#a984f5", "#a984f5", "#3fb6b2", "#9b9ba4",
+  "#3a3a42", "#ff7b86", "#74d493", "#e6b45a", "#c4b6f2", "#c4b6f2", "#5fd6d1", "#edecf3",
 ];
 
 /** Resolve a 0–255 ANSI palette index to a CSS colour. */

@@ -2,28 +2,46 @@
    Copyright (C) 2026 And The Next GmbH - https://userland.run
    Part of the userland.run terminal; dual-licensed - see LICENSE.md. */
 
-/* Design tokens — the Paged dark theme. Source of truth:
-   style-guide/terminal/_ds/.../colors_and_type.css (the `.dark` block).
-   Console CSS references these via var(--token), never raw hex/px. */
+/* Design tokens. Source of truth: style-guide/terminal/Userland Terminal.dc.html
+   (the hi-fidelity terminal comp), grounded in the Paged `.dark` system. The
+   comp uses a four-tone surface ramp — desk → card → sidebar → chrome — rather
+   than a single panel grey. Console CSS references these via var(--token). */
 :root {
-  --bg: #18181b;
-  --fg: #ededf0;
-  --border: #2c2c31;
-  --muted: #232327;
-  --muted-fg: #9b9ba4;
-  --primary: #a984f5;
-  --elevated: #232328;
-  --chrome-panel-bg: #1c1c20;
-  --chrome-label: #7e7e8a;
-  --field: #0e0e10; /* terminal pane ground */
+  /* surface ramp (comp) */
+  --ground: #0e0e10;        /* the desk behind the window            */
+  --surface: #15151a;       /* the terminal window / scrollback pane */
+  --sidebar-bg: #191920;    /* session + file rail                   */
+  --chrome-bg: #1b1b20;     /* top bar + footer                      */
+  --border: #2c2c31;        /* window hairline / dividers            */
+  --elevated: #232328;      /* popovers, command bar                 */
+  --popover-border: #34343b;/* popover edge + scrollbar thumb        */
+
+  /* ink */
+  --fg: #edecf3;            /* command text, wordmark                */
+  --muted-fg: #9b9ba4;      /* footer text, secondary                */
+  --label: #7e7e8a;         /* uppercase section labels              */
+  --primary: #a984f5;       /* violet — caret, prompt, .run, active  */
+  --icon: #b6b6c0;          /* idle icon-button glyph                */
+  --sep: #3f3f48;           /* footer middot separators              */
+  --stat-label: #6c6c76;    /* footer metric labels (up, ln)         */
+  --ok: #57b87a;            /* status dot — WASM ready / live         */
+  --ok-text: #8fcca5;       /* status text                           */
+
+  /* interaction */
+  --hover: rgba(255, 255, 255, 0.07);   /* icon-button hover wash */
+  --row-hover: rgba(255, 255, 255, 0.045);
+  --selected: rgba(169, 132, 245, 0.14); /* active session row fill */
 
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --radius-sm: 4px;
+  --radius-md: 6px;
   --radius-lg: 8px;
-  --shadow-pop: 0 6px 20px rgba(0, 0, 0, 0.18);
+  --radius-card: 10px;
+  --shadow-card: 0 18px 50px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 6px 20px rgba(0, 0, 0, 0.45);
   --caret-rate: 530ms;
 
   --font-sans: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
@@ -35,118 +53,195 @@
 html, body {
   margin: 0;
   height: 100%;
-  background: var(--bg);
+  background: var(--ground);
   color: var(--fg);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 
+/* The comp frames the terminal as a floating, rounded window on the desk. */
+body { padding: 14px; }
+
+::selection { background: rgba(169, 132, 245, 0.32); }
+
+/* Slim violet-grey scrollbars (comp) — chrome panes only; the canvas paints
+   its own scrollback. */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb {
+  background: var(--popover-border);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: #46464f; background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
 #app {
-  height: 100vh;
+  position: relative;
+  height: calc(100vh - 28px);
   display: grid;
   grid-template-rows: auto 1fr auto;
   grid-template-columns: auto 1fr;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
 }
 #app.sidebar-collapsed { grid-template-columns: 0 1fr; }
+
+/* — shared icon button (comp .ut-btn) — */
+.icon-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: var(--icon);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.icon-btn:hover { background: var(--hover); color: var(--fg); }
+
+kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--ground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  color: var(--muted-fg);
+}
 
 /* — top bar — */
 #topbar {
   grid-column: 1 / 3;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  height: 36px;
-  padding: 0 var(--space-3);
-  background: var(--chrome-panel-bg);
+  gap: var(--space-2);
+  height: 34px;
+  padding: 0 10px 0 8px;
+  background: var(--chrome-bg);
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
 }
-#topbar .brand { font-weight: 600; letter-spacing: -0.01em; }
-#topbar .brand .dot { color: var(--primary); }
-#topbar .brand .sep { color: var(--muted-fg); margin: 0 var(--space-2); }
-#topbar .brand .app { color: var(--muted-fg); font-weight: 500; }
-#topbar .spacer { flex: 1; }
-#topbar .hints {
-  background: none;
-  border: none;
-  color: var(--muted-fg);
-  font-family: var(--font-sans);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 4px 6px;
-  border-radius: var(--radius-sm);
-}
-#topbar .hints:hover { background: var(--muted); color: var(--fg); }
-
-.ghost-btn {
-  background: none;
-  border: 1px solid transparent;
-  color: var(--muted-fg);
-  border-radius: var(--radius-sm);
-  height: 24px;
-  min-width: 26px;
-  padding: 0 var(--space-1);
-  cursor: pointer;
+#topbar .brand {
+  font-family: var(--font-mono);
+  font-weight: 700;
   font-size: 13px;
+  letter-spacing: -0.03em;
+  color: var(--fg);
   line-height: 1;
 }
-.ghost-btn:hover { background: var(--muted); color: var(--fg); }
-
-kbd {
+#topbar .brand .dot { color: var(--primary); }
+#topbar .spacer { flex: 1; }
+#topbar .badge {
   font-family: var(--font-mono);
-  font-size: 11px;
-  background: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 1px 5px;
+  font-size: 9.5px;
+  color: #a7a7b2;
+  padding: 4px 9px;
+  border: 1px solid var(--popover-border);
+  border-radius: 999px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
 }
+#topbar .actions { display: flex; align-items: center; gap: 2px; }
 
 /* — sidebar — */
 #sidebar {
   grid-row: 2;
   grid-column: 1;
-  width: 220px;
-  background: var(--chrome-panel-bg);
+  width: 232px;
+  background: var(--sidebar-bg);
   border-right: 1px solid var(--border);
   overflow: hidden auto;
-  padding: var(--space-3) 0;
+  padding: var(--space-2) var(--space-2) 14px;
 }
 #app.sidebar-collapsed #sidebar { display: none; }
 
-.panel { padding: 0 var(--space-3) var(--space-4); }
-.panel-label {
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  font-weight: 700;
-  color: var(--chrome-label);
-  margin-bottom: var(--space-2);
-}
-.list { list-style: none; margin: 0; padding: 0; }
-.list .row {
+.panel + .panel { margin-top: var(--space-1); }
+.panel-head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 13px;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  cursor: default;
+  padding: 7px 6px 7px 4px;
+  border-radius: 5px;
+  cursor: pointer;
+  user-select: none;
 }
-.list .row.active { background: var(--muted); }
-.list .row .dotmark {
-  width: 7px; height: 7px; border-radius: 999px;
-  background: var(--primary);
-  box-shadow: 0 0 6px var(--primary);
+.panel-head:hover { background: var(--row-hover); }
+.panel-head .twist {
+  color: var(--label);
+  transition: transform 0.15s;
+  flex: none;
 }
-.list .row .row-meta { margin-left: auto; color: var(--muted-fg); font-size: 11px; }
-.muted-note { font-size: 12px; color: var(--muted-fg); }
-.muted-note code { font-family: var(--font-mono); color: var(--fg); }
+.panel.collapsed .panel-head .twist { transform: rotate(0deg); }
+.panel-head .twist { transform: rotate(90deg); }
+.panel-label {
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--label);
+  flex: 1;
+}
+.panel-hint {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: #5a5a64;
+}
+.panel-body { padding: 2px 0 var(--space-2); }
+.panel.collapsed .panel-body { display: none; }
+
+.list { list-style: none; margin: 0; padding: 0; }
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 8px;
+  margin: 1px 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.session-row:hover { background: var(--row-hover); }
+.session-row.active { background: var(--selected); }
+.session-row .session-ico { color: var(--label); flex: none; }
+.session-row.active .session-ico { color: var(--primary); }
+.session-meta { flex: 1; min-width: 0; }
+.session-name {
+  font-size: 11px;
+  color: #c4c4cc;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-row.active .session-name { color: #d9ccfb; }
+.session-cwd {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: #6c6c76;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.muted-note {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #6c6c76;
+  line-height: 1.5;
+  padding: 2px 6px;
+}
 
 /* — terminal area — */
 #terminal-area {
   grid-row: 2;
   grid-column: 2;
-  background: var(--field);
+  background: var(--surface);
   overflow: hidden;
   padding: var(--space-3);
   min-width: 0;
@@ -159,19 +254,75 @@ kbd {
   grid-column: 1 / 3;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  height: 24px;
-  padding: 0 var(--space-3);
-  background: var(--chrome-panel-bg);
+  height: 30px;
+  padding: 0 14px;
+  background: var(--chrome-bg);
   border-top: 1px solid var(--border);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--muted-fg);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
 }
 #footer .spacer { flex: 1; }
+#footer .sep { color: var(--sep); padding: 0 10px; }
+#footer .lbl { color: var(--stat-label); }
 #footer .stat.run { color: var(--primary); }
+#footer .stat.status { display: inline-flex; align-items: center; gap: 5px; color: var(--ok-text); }
+#footer .stat.status .dot {
+  width: 6px; height: 6px; border-radius: 999px; background: var(--ok);
+}
 
-/* — Cmd-K palette — */
+/* — settings popover (comp) — */
+#settings-popover {
+  position: absolute;
+  top: 40px;
+  right: 10px;
+  width: 248px;
+  background: var(--elevated);
+  border: 1px solid var(--popover-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-pop);
+  padding: var(--space-2);
+  z-index: 30;
+}
+#settings-popover[hidden] { display: none; }
+.settings-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--label);
+  padding: 6px 8px 8px;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-md);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: #d4d4dc;
+  cursor: pointer;
+  text-align: left;
+}
+.settings-row:hover { background: var(--row-hover); }
+.settings-row svg { flex: none; }
+.settings-row kbd { margin-left: auto; }
+.settings-div { height: 1px; background: var(--popover-border); margin: 6px 8px; }
+.settings-note {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #5a5a64;
+  padding: 4px 8px 4px;
+  line-height: 1.5;
+}
+
+/* — Cmd-K palette (a console addition, styled to the popover family) — */
 #palette-overlay {
   position: fixed;
   inset: 0;
@@ -186,7 +337,7 @@ kbd {
 #palette {
   width: min(520px, 90vw);
   background: var(--elevated);
-  border: 1px solid var(--border);
+  border: 1px solid var(--popover-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-pop);
   overflow: hidden;
@@ -213,5 +364,5 @@ kbd {
   cursor: pointer;
 }
 #palette-list li .pl-hint { margin-left: auto; color: var(--muted-fg); font-family: var(--font-mono); font-size: 11px; }
-#palette-list li.sel { background: var(--primary); color: var(--bg); }
-#palette-list li.sel .pl-hint { color: var(--bg); }
+#palette-list li.sel { background: var(--primary); color: var(--ground); }
+#palette-list li.sel .pl-hint { color: var(--ground); }

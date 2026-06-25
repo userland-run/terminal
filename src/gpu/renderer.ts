@@ -92,8 +92,9 @@ const BLEND: GPUBlendState = {
   alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
 };
 
-// Selection highlight — a deep violet tint (token --primary-soft, dark).
-const SELECTION_RGB = hexToRgb("#39306b");
+// Selection highlight — the comp's ::selection violet rgba(169,132,245,.32)
+// composited over the terminal surface (#15151a).
+const SELECTION_RGB = hexToRgb("#443960");
 
 function sameRgb(a: Rgb | null, b: Rgb | null): boolean {
   if (a === b) return true;
