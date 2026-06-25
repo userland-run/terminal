@@ -24,6 +24,8 @@ declare module "@container/nanovm.mjs" {
       wasm: string | ArrayBuffer | Uint8Array;
     }): Promise<NanoVM>;
     termInit(cols?: number, rows?: number): void;
+    termResize(cols: number, rows: number): void;
+    setTty(on?: boolean): void;
     termSnapshot(): TermSnapshot | null;
     termEcho(data: Uint8Array | string): void;
     writeStdin(data: Uint8Array | string): void;

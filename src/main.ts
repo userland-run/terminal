@@ -24,6 +24,7 @@ async function main() {
 
   const vm = await NanoVM.create({ ramMB: 256, wasm: "/nano.wasm" });
   vm.termInit(COLS, ROWS);
+  vm.setTty(true); // real guest tty: isatty=true, in-VM echo + line discipline
 
   // Render loop — full redraw per frame; violet cursor blinks at 530ms.
   const tick = () => {
@@ -33,36 +34,31 @@ async function main() {
   };
   requestAnimationFrame(tick);
 
-  // Input — Phase-0 front-end cooked mode: buffer a line, echo locally into the
-  // grid, send the whole line to the guest on Enter. Real echo / line discipline
-  // / SIGINT move into the VM in Phase 1.
-  let line = "";
+  // Input — forward raw keystrokes to the guest tty. The guest echoes and
+  // line-edits (ash's line editor in raw mode, or the in-VM cooked-mode line
+  // discipline), so the front end does no local echo.
   window.addEventListener("keydown", (e) => {
-    if (e.ctrlKey && (e.key === "c" || e.key === "C")) {
-      vm.termEcho("^C\r\n");
-      vm.writeStdin("\n"); // fresh prompt (real SIGINT is Phase 1)
-      line = "";
-      e.preventDefault();
-      return;
-    }
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-
-    if (e.key === "Enter") {
-      vm.termEcho("\r\n");
-      vm.writeStdin(line + "\n");
-      line = "";
-      e.preventDefault();
-    } else if (e.key === "Backspace") {
-      if (line) {
-        line = line.slice(0, -1);
-        vm.termEcho("\b \b");
+    if (e.metaKey || e.altKey) return;
+    let bytes: string | null = null;
+    if (e.ctrlKey) {
+      const k = e.key.toLowerCase();
+      if (k.length === 1 && k >= "a" && k <= "z") {
+        bytes = String.fromCharCode(k.charCodeAt(0) - 96); // Ctrl-A..Z -> 0x01..0x1a
+      } else {
+        return;
       }
-      e.preventDefault();
-    } else if (e.key.length === 1) {
-      line += e.key;
-      vm.termEcho(e.key);
-      e.preventDefault();
-    }
+    } else if (e.key === "Enter") bytes = "\r";
+    else if (e.key === "Backspace") bytes = "\x7f";
+    else if (e.key === "Tab") bytes = "\t";
+    else if (e.key === "Escape") bytes = "\x1b";
+    else if (e.key === "ArrowUp") bytes = "\x1b[A";
+    else if (e.key === "ArrowDown") bytes = "\x1b[B";
+    else if (e.key === "ArrowRight") bytes = "\x1b[C";
+    else if (e.key === "ArrowLeft") bytes = "\x1b[D";
+    else if (e.key.length === 1) bytes = e.key;
+    else return;
+    vm.writeStdin(bytes);
+    e.preventDefault();
   });
 
   // Boot an interactive shell. The run loop yields to the event loop (and parks
