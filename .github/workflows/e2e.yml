@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-UEL
+# Copyright (C) 2026 And The Next GmbH - https://userland.run
+#
+# Playwright E2E gate for the userland.run terminal. Runs on every default-branch
+# push + PR, and publishes the results contract to the status hub on main.
+
+name: e2e
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  playwright-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      # The terminal checkout. Place it under terminal/ so the sibling nano/
+      # checkout below resolves the @container vite alias (../nano/container).
+      - name: Checkout terminal
+        uses: actions/checkout@v4
+        with:
+          path: terminal
+
+      # `npm run build` imports @container → ../nano/container (see vite.config.ts),
+      # so the build needs the sibling nano repo checked out next to terminal/.
+      - name: Checkout nano (sibling, for the @container alias)
+        uses: actions/checkout@v4
+        with:
+          repository: userland-run/nano
+          path: nano
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: terminal/package-lock.json
+
+      - name: Install dependencies
+        working-directory: terminal
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: terminal
+        run: npx playwright install --with-deps chromium
+
+      # public/nano.wasm is committed (busybox-bundled, boots `sh -i`), so no
+      # nano build step is needed — the sibling checkout is only for @container.
+      - name: Run Playwright (writes userland-results.json via the reporter)
+        working-directory: terminal
+        run: npx playwright test --project=chromium
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: terminal/playwright-report/
+          retention-days: 7
+
+      - name: Publish results to userland.run status
+        if: github.ref == 'refs/heads/main'
+        uses: userland-run/status/.github/actions/publish-results@main
+        with:
+          source: terminal
+          suite: playwright-e2e
+          results-file: terminal/userland-results.json
+          token: ${{ secrets.STATUS_DISPATCH_TOKEN }}

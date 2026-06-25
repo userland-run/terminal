@@ -5,3 +5,10 @@ dist
 
 # Generated from the nano repo (see README) — not checked in.
 public/nano.wasm
+
+# Playwright E2E artifacts (the reporter's results file is published, not committed).
+/userland-results.json
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
