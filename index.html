@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Console — userland.run</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,700;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      html, body { margin: 0; height: 100%; background: #18181b; color: #edecf3; }
+      #app { height: 100vh; display: flex; align-items: center; justify-content: center; }
+      canvas { background: #0e0e10; border: 1px solid #2c2c31; border-radius: 6px; }
+      #status { position: fixed; bottom: 8px; left: 12px; font: 11px "JetBrains Mono", monospace; color: #6c6c76; }
+      #status .run { color: #a984f5; }
+    </style>
+  </head>
+  <body>
+    <div id="app"><canvas id="screen"></canvas></div>
+    <div id="status">userland<span class="run">.run</span> · Console (Phase 0)</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

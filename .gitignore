@@ -1,0 +1,7 @@
+node_modules
+dist
+*.local
+.DS_Store
+
+# Generated from the nano repo (see README) — not checked in.
+public/nano.wasm

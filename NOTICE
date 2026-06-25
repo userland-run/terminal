@@ -1,0 +1,16 @@
+# Third-Party Notices — userland.run terminal
+
+The terminal is licensed as described in LICENSE.md (AGPL-3.0-only OR
+LicenseRef-UEL). This file lists third-party material the project redistributes.
+
+This repository does not yet bundle third-party assets. When such assets are
+added, list them here with their upstream license. Expected components for the
+Vello/WebGPU terminal include:
+
+| Component      | Upstream license  | Notes                          |
+| -------------- | ----------------- | ------------------------------ |
+| JetBrains Mono | SIL OFL 1.1       | Terminal typeface (if bundled) |
+| Vello / wgpu   | Apache-2.0 OR MIT | Rust rendering crates          |
+
+Verify and complete this list against the assets actually committed before
+redistribution.
