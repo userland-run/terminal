@@ -17,7 +17,26 @@ const mirrorOf = (page: Page): Locator =>
 // Wait for the boot indicator (#stat-status flips "booting" → "live" once the VM
 // is created in src/main.ts) and for the shell prompt to render into the mirror.
 async function bootShell(page: Page): Promise<Locator> {
+  // Surface boot failures: NanoVM.create() allocates a shared WebAssembly.Memory,
+  // which needs cross-origin isolation. If that rejects, #stat-status stays
+  // "booting"; log the cause and the isolation state so CI failures are legible.
+  page.on("pageerror", (e) => console.log(`[pageerror] ${e.message}`));
+  page.on("console", (m) => {
+    if (m.type() === "error") console.log(`[console.error] ${m.text()}`);
+  });
+  await page.addInitScript(() => {
+    addEventListener("unhandledrejection", (e) =>
+      console.error(`[unhandledrejection] ${(e.reason && e.reason.message) || String(e.reason)}`),
+    );
+  });
+
   await page.goto("/");
+  const env = await page.evaluate(() => ({
+    isolated: crossOriginIsolated,
+    sab: typeof SharedArrayBuffer,
+  }));
+  console.log(`[boot] crossOriginIsolated=${env.isolated} SharedArrayBuffer=${env.sab}`);
+
   await expect(page.locator("#stat-status")).toHaveText("live");
   const mirror = mirrorOf(page);
   // The interactive `sh -i` prompt is the first thing painted into the mirror.

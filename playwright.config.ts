@@ -21,7 +21,7 @@ export default defineConfig({
   expect: { timeout: 60_000 },
   use: {
     baseURL: "http://localhost:4173",
-    trace: "on-first-retry",
+    trace: "retain-on-failure",
   },
   // `npm run build` also pulls in the sibling `../nano/container` via the
   // @container vite alias, so that checkout must exist (CI handles this with a
@@ -38,7 +38,13 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        // CI robustness: --no-sandbox (no user namespaces on the runner) and
+        // --disable-dev-shm-usage (the VM's large SharedArrayBuffer can exhaust
+        // a small /dev/shm and hang the renderer).
+        launchOptions: { args: ["--no-sandbox", "--disable-dev-shm-usage"] },
+      },
     },
   ],
 });
