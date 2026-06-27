@@ -48,8 +48,13 @@ jobs:
         working-directory: terminal
         run: npx playwright install --with-deps chromium
 
-      # public/nano.wasm is committed (busybox-bundled, boots `sh -i`), so no
-      # nano build step is needed — the sibling checkout is only for @container.
+      # public/nano.wasm is gitignored (a build artifact), so fetch the
+      # busybox-bundled runtime from the nano release into public/ before the
+      # build — vite copies it to /nano.wasm, which main.ts boots.
+      - name: Fetch nano runtime (busybox-bundled) into public/
+        working-directory: terminal
+        run: curl -fsSL "https://github.com/userland-run/nano/releases/download/v0.1.0/nano.busybox.wasm" -o public/nano.wasm
+
       - name: Run Playwright (writes userland-results.json via the reporter)
         working-directory: terminal
         run: npx playwright test --project=chromium
