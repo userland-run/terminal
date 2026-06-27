@@ -59,6 +59,20 @@ export class TerminalCatalog {
     }
   }
 
+  /** Install a whole topic bundle into the guest + record each member. */
+  async installBundle(slug: string): Promise<void> {
+    this.echo(`\ninstalling the ${slug} bundle from the catalog…\n`);
+    try {
+      const r = await this.catalog.installBundle(this.target(), slug);
+      const refs = r.installed.map((m: any) => `${m.name}@${m.version}`);
+      saveRecord([...loadRecord(), ...refs]);
+      this.echo(`installed ${r.installed.length} app(s) from ${r.topic}` +
+        (r.failed.length ? ` (${r.failed.length} failed)` : "") + `\n`);
+    } catch (e: any) {
+      this.echo(`bundle install failed: ${e?.message ?? e}\n`);
+    }
+  }
+
   /** Print the signed index, marking what's already installed. */
   async browse(): Promise<void> {
     try {
@@ -109,6 +123,14 @@ export class TerminalCatalog {
     ];
     try {
       const idx = await this.catalog.index();
+      for (const slug of Object.keys(idx.bundles || {}).sort()) {
+        cmds.push({
+          id: `catalog-bundle-${slug}`,
+          title: `Catalog: install ${slug} bundle`,
+          hint: "bundle",
+          run: () => void this.installBundle(slug),
+        });
+      }
       for (const app of Object.keys(idx.apps).sort()) {
         cmds.push({
           id: `catalog-install-${app}`,
