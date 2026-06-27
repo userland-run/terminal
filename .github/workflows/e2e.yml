@@ -53,7 +53,7 @@ jobs:
       # build — vite copies it to /nano.wasm, which main.ts boots.
       - name: Fetch nano runtime (busybox-bundled) into public/
         working-directory: terminal
-        run: curl -fsSL "https://github.com/userland-run/nano/releases/download/v0.1.0/nano.busybox.wasm" -o public/nano.wasm
+        run: curl -fsSL --create-dirs "https://github.com/userland-run/nano/releases/download/v0.1.0/nano.busybox.wasm" -o public/nano.wasm
 
       - name: Run Playwright (writes userland-results.json via the reporter)
         working-directory: terminal
