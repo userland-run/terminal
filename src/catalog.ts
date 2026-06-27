@@ -42,6 +42,11 @@ export class TerminalCatalog {
     return { writeFile: (path: string, bytes: Uint8Array) => this.vm.addFile(path, bytes) };
   }
 
+  /** Wire this catalog into the VM so scripts can `await nano.catalog.install(...)`. */
+  bindVm(): void {
+    if (typeof this.vm.useCatalog === "function") this.vm.useCatalog(this.catalog);
+  }
+
   private echo(s: string): void {
     this.vm.termEcho(s.replace(/\n/g, "\r\n"));
   }

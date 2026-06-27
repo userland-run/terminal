@@ -75,6 +75,7 @@ async function main() {
   // come from the OPFS cache, so this is fast/offline). Non-blocking — the shell
   // is usable immediately; installed binaries appear in the VFS as they land.
   const catalog = new TerminalCatalog(vm);
+  catalog.bindVm();        // scripts can `await nano.catalog.install(...)`
   void catalog.rehydrate();
   chrome.setSession("running");
   chrome.setStatus("live");
