@@ -13,8 +13,12 @@ const workspaceRoot = fileURLToPath(new URL("..", import.meta.url));
 // JetBrains Mono webfont) load without needing CORP headers.
 export default defineConfig({
   resolve: {
-    // The browser NanoVM module lives in the sibling `nano/` repo.
-    alias: { "@container": fileURLToPath(new URL("../nano/container", import.meta.url)) },
+    // The browser NanoVM module lives in the sibling `nano/` repo; the catalog
+    // client (Catalog/installer) comes from the built SDK bundle.
+    alias: {
+      "@container": fileURLToPath(new URL("../nano/container", import.meta.url)),
+      "@sdk": fileURLToPath(new URL("../sdk/dist/index.js", import.meta.url)),
+    },
   },
   server: {
     headers: {

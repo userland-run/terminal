@@ -37,6 +37,12 @@ export class CommandBar {
     return !this.overlay.hidden;
   }
 
+  /** Append commands after construction (e.g. catalog actions fetched async). */
+  addCommands(cmds: Command[]) {
+    this.commands.push(...cmds);
+    if (this.open) this.render();
+  }
+
   show() {
     this.overlay.hidden = false;
     this.input.value = "";

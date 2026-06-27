@@ -9,6 +9,7 @@ import { CanvasRenderer, type TermRenderer } from "./renderer";
 import { GpuRenderer } from "./gpu/renderer";
 import { Chrome } from "./chrome";
 import { CommandBar } from "./commandbar";
+import { TerminalCatalog } from "./catalog";
 import { A11yMirror } from "./a11y";
 import {
   pixelToCell,
@@ -69,6 +70,12 @@ async function main() {
   const vm = await NanoVM.create({ ramMB: 256, wasm: "/nano.wasm" });
   vm.termInit(cols, rows);
   vm.setTty(true); // real guest tty: isatty=true, in-VM echo + line discipline
+
+  // Catalog: re-install anything the user installed in a prior session (chunks
+  // come from the OPFS cache, so this is fast/offline). Non-blocking — the shell
+  // is usable immediately; installed binaries appear in the VFS as they land.
+  const catalog = new TerminalCatalog(vm);
+  void catalog.rehydrate();
   chrome.setSession("running");
   chrome.setStatus("live");
   chrome.setCwd("/");
@@ -220,6 +227,11 @@ async function main() {
     { id: "font-reset", title: "Reset font size", hint: "⌘0", run: () => setFont(DEFAULT_FONT_PX) },
     { id: "sidebar", title: "Toggle sidebar", hint: "⌘B", run: toggleSidebar },
   ]);
+
+  // Catalog actions (browse / show-installed + one install entry per index app).
+  // Fetched async so the palette is usable immediately; entries appear when the
+  // signed index loads.
+  void catalog.commands().then((cmds) => palette.addCommands(cmds));
 
   // Top-bar ⊘/⟳/⚙ + settings-popover rows. Restart fully re-creates the VM by
   // reloading — the honest "reboot" until the host exposes a soft reset.
