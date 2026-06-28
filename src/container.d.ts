@@ -34,7 +34,7 @@ declare module "@container/nanovm.mjs" {
     termSnapshot(scrollOffset?: number): TermSnapshot | null;
     termEcho(data: Uint8Array | string): void;
     /** Write a file into the guest VFS (used by the catalog installer). */
-    addFile(path: string, content: Uint8Array | string): void;
+    addFile(path: string, content: Uint8Array | string, mode?: number): void;
     writeStdin(data: Uint8Array | string): void;
     setInteractiveStdin(on?: boolean): void;
     closeStdin(): void;

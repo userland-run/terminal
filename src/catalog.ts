@@ -37,9 +37,14 @@ export class TerminalCatalog {
 
   constructor(private readonly vm: any) {}
 
-  /** InstallTarget over the container's VFS — write installed files via addFile. */
+  /** InstallTarget over the container's VFS — write installed files via addFile.
+   *  The manifest's mode (0o755 for binaries) must flow through so installed
+   *  apps land executable and the guest shell can actually run them. */
   private target() {
-    return { writeFile: (path: string, bytes: Uint8Array) => this.vm.addFile(path, bytes) };
+    return {
+      writeFile: (path: string, bytes: Uint8Array, mode?: number) =>
+        this.vm.addFile(path, bytes, mode),
+    };
   }
 
   /** Wire this catalog into the VM so scripts can `await nano.catalog.install(...)`. */
