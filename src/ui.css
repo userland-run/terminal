@@ -276,12 +276,18 @@ kbd {
   padding: 5px 8px;
   margin: 1px 0;
   border: none;
-  background: none;
+  background: none;        /* install progress paints background-image (a left→right fill) */
   border-radius: var(--radius-md);
   cursor: pointer;
   text-align: left;
   font-family: var(--font-sans);
-  transition: background 0.1s;
+  transition: background-color 0.1s;
+}
+/* indeterminate (bundle) install — gently pulse the row fill */
+.catalog-row.installing { animation: catalog-pulse 1.1s ease-in-out infinite; }
+@keyframes catalog-pulse {
+  0%, 100% { background-color: transparent; }
+  50% { background-color: var(--selected); }
 }
 .catalog-row:hover:not(:disabled) { background: var(--row-hover); }
 .catalog-row:disabled { cursor: default; }

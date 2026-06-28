@@ -32,6 +32,30 @@ export interface PaletteCommand {
   run: () => void;
 }
 
+// Mirror of the SDK's InstallProgress (the @sdk alias points at the built bundle,
+// whose types aren't on the TS path — so we keep a local shape).
+type InstallProgress = {
+  phase: "index" | "manifest" | "chunk" | "write" | "done";
+  file?: string;
+  chunk?: string;
+  fetched?: number;
+  total?: number;
+};
+
+/** Map an installer progress event to a 0–100 bar percentage. The chunk phase
+ *  (the bulk of the work) maps fetched/total into a 10–92% band; the framing
+ *  phases bookend it so the bar always moves forward. */
+function installPct(e: InstallProgress): number {
+  switch (e.phase) {
+    case "index": return 4;
+    case "manifest": return 10;
+    case "chunk": return e.total ? 10 + Math.round((e.fetched! / e.total) * 82) : 50;
+    case "write": return 94;
+    case "done": return 100;
+    default: return 0;
+  }
+}
+
 export class TerminalCatalog {
   private readonly catalog = new Catalog();
 
@@ -57,11 +81,12 @@ export class TerminalCatalog {
   }
 
   /** Install one app ("name" or "name@version") into the guest + record it.
-   *  Returns true on success (so the sidebar can update the row state). */
-  async install(ref: string): Promise<boolean> {
+   *  `onProgress` receives the installer's phase/chunk events (so the sidebar
+   *  can drive a progress bar). Returns true on success. */
+  async install(ref: string, onProgress?: (e: InstallProgress) => void): Promise<boolean> {
     this.echo(`\ninstalling ${ref} from the catalog…\n`);
     try {
-      const m = await this.catalog.install(this.target(), ref);
+      const m = await this.catalog.install(this.target(), ref, onProgress ? { onProgress } : undefined);
       const exact = `${m.name}@${m.version}`;
       saveRecord([...loadRecord(), exact]);
       this.echo(`installed ${exact} → ${m.files.map((f: any) => f.path).join(", ")}\n`);
@@ -216,10 +241,26 @@ export class TerminalCatalog {
       btn.addEventListener("click", async () => {
         if (btn.disabled) return;
         btn.disabled = true;
-        btn.classList.add("installing");
-        stateEl.textContent = "…";
-        const ok = kind === "bundle" ? await this.installBundle(ref) : await this.install(ref);
-        btn.classList.remove("installing");
+        let ok: boolean;
+        if (kind === "bundle") {
+          // Indeterminate (member count isn't known up front) — pulse the row.
+          btn.classList.add("installing");
+          stateEl.textContent = "·";
+          ok = await this.installBundle(ref);
+          btn.classList.remove("installing");
+        } else {
+          // Determinate: fill the row background left→right and show the % in the
+          // version slot. Both live inside existing boxes, so nothing overflows.
+          const fill = (pct: number) => {
+            btn.style.backgroundImage =
+              `linear-gradient(to right, rgba(169,132,245,0.22) ${pct}%, transparent ${pct}%)`;
+            verEl.textContent = `${pct}%`;
+          };
+          fill(0);
+          ok = await this.install(ref, (e) => fill(installPct(e)));
+          btn.style.backgroundImage = "";
+          verEl.textContent = version; // restore the version label
+        }
         if (ok) {
           btn.classList.add("installed");
           stateEl.textContent = "✓";
