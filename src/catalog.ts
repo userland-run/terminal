@@ -56,21 +56,25 @@ export class TerminalCatalog {
     this.vm.termEcho(s.replace(/\n/g, "\r\n"));
   }
 
-  /** Install one app ("name" or "name@version") into the guest + record it. */
-  async install(ref: string): Promise<void> {
+  /** Install one app ("name" or "name@version") into the guest + record it.
+   *  Returns true on success (so the sidebar can update the row state). */
+  async install(ref: string): Promise<boolean> {
     this.echo(`\ninstalling ${ref} from the catalog…\n`);
     try {
       const m = await this.catalog.install(this.target(), ref);
       const exact = `${m.name}@${m.version}`;
       saveRecord([...loadRecord(), exact]);
       this.echo(`installed ${exact} → ${m.files.map((f: any) => f.path).join(", ")}\n`);
+      return true;
     } catch (e: any) {
       this.echo(`install failed: ${e?.message ?? e}\n`);
+      return false;
     }
   }
 
-  /** Install a whole topic bundle into the guest + record each member. */
-  async installBundle(slug: string): Promise<void> {
+  /** Install a whole topic bundle into the guest + record each member.
+   *  Returns true if the bundle installed (some members may still fail). */
+  async installBundle(slug: string): Promise<boolean> {
     this.echo(`\ninstalling the ${slug} bundle from the catalog…\n`);
     try {
       const r = await this.catalog.installBundle(this.target(), slug);
@@ -78,8 +82,10 @@ export class TerminalCatalog {
       saveRecord([...loadRecord(), ...refs]);
       this.echo(`installed ${r.installed.length} app(s) from ${r.topic}` +
         (r.failed.length ? ` (${r.failed.length} failed)` : "") + `\n`);
+      return true;
     } catch (e: any) {
       this.echo(`bundle install failed: ${e?.message ?? e}\n`);
+      return false;
     }
   }
 
@@ -153,5 +159,118 @@ export class TerminalCatalog {
       /* index unreachable — keep the static commands only */
     }
     return cmds;
+  }
+
+  /**
+   * Render the catalog into a sidebar panel: a searchable list of installable
+   * apps (and topic bundles). Each row installs into the running guest on click
+   * (echoing progress to the terminal) and reflects installed state with a ✓.
+   * Falls back to a note when the signed index is unreachable.
+   */
+  async mountSidebar(refs: { list: HTMLElement; hint: HTMLElement; filter?: HTMLInputElement }): Promise<void> {
+    const { list, hint } = refs;
+    let idx: any;
+    try {
+      idx = await this.catalog.index();
+    } catch (e: any) {
+      list.innerHTML = "";
+      const note = document.createElement("div");
+      note.className = "muted-note";
+      note.textContent = `catalog unreachable: ${e?.message ?? e}`;
+      list.appendChild(note);
+      return;
+    }
+
+    const installed = new Set(loadRecord());
+    hint.textContent = `gen ${idx.generation}`;
+    list.innerHTML = "";
+
+    const sub = (text: string) => {
+      const h = document.createElement("div");
+      h.className = "catalog-sub";
+      h.textContent = text;
+      list.appendChild(h);
+    };
+
+    // One installable row. `kind` drives the install action; `ref` is the exact
+    // index key (name@version) or bundle slug used to install + to track state.
+    const row = (name: string, version: string, ref: string, kind: "app" | "bundle", isInstalled: boolean) => {
+      const btn = document.createElement("button");
+      btn.className = "catalog-row" + (kind === "bundle" ? " catalog-bundle" : "") + (isInstalled ? " installed" : "");
+      btn.dataset.search = `${name} ${version}`.toLowerCase();
+      btn.dataset.ref = ref;
+      btn.disabled = isInstalled;
+      btn.title = isInstalled ? `${name} — installed` : `install ${name}`;
+
+      const nameEl = document.createElement("span");
+      nameEl.className = "catalog-name";
+      nameEl.textContent = name;
+      const verEl = document.createElement("span");
+      verEl.className = "catalog-ver";
+      verEl.textContent = version;
+      const stateEl = document.createElement("span");
+      stateEl.className = "catalog-state";
+      stateEl.textContent = isInstalled ? "✓" : "+";
+      btn.append(nameEl, verEl, stateEl);
+
+      btn.addEventListener("click", async () => {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn.classList.add("installing");
+        stateEl.textContent = "…";
+        const ok = kind === "bundle" ? await this.installBundle(ref) : await this.install(ref);
+        btn.classList.remove("installing");
+        if (ok) {
+          btn.classList.add("installed");
+          stateEl.textContent = "✓";
+          btn.title = `${name} — installed`;
+          if (kind === "bundle") this.refreshInstalled(list); // a bundle pulls in several apps
+        } else {
+          btn.disabled = false;
+          stateEl.textContent = "!";
+          btn.title = `install ${name} (failed — click to retry)`;
+        }
+      });
+      list.appendChild(btn);
+    };
+
+    const bundles = Object.keys(idx.bundles || {}).sort();
+    if (bundles.length) {
+      sub("Bundles");
+      for (const slug of bundles) row(slug, "bundle", slug, "bundle", false);
+    }
+
+    const apps = Object.keys(idx.apps).sort();
+    sub("Apps");
+    for (const appKey of apps) {
+      const at = appKey.lastIndexOf("@");
+      const name = at > 0 ? appKey.slice(0, at) : appKey;
+      const version = at > 0 ? appKey.slice(at + 1) : "";
+      row(name, version, appKey, "app", installed.has(appKey));
+    }
+
+    if (refs.filter) {
+      refs.filter.addEventListener("input", () => {
+        const q = refs.filter!.value.trim().toLowerCase();
+        for (const el of list.querySelectorAll<HTMLElement>(".catalog-row")) {
+          el.style.display = !q || (el.dataset.search || "").includes(q) ? "" : "none";
+        }
+      });
+    }
+  }
+
+  /** Re-mark app rows now present in the persisted record (e.g. after a bundle
+   *  install pulled several apps in at once). */
+  private refreshInstalled(list: HTMLElement): void {
+    const installed = new Set(loadRecord());
+    for (const el of list.querySelectorAll<HTMLButtonElement>(".catalog-row:not(.catalog-bundle)")) {
+      const ref = el.dataset.ref;
+      if (ref && installed.has(ref) && !el.classList.contains("installed")) {
+        el.classList.add("installed");
+        el.disabled = true;
+        const st = el.querySelector(".catalog-state");
+        if (st) st.textContent = "✓";
+      }
+    }
   }
 }

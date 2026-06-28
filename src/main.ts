@@ -77,6 +77,13 @@ async function main() {
   const catalog = new TerminalCatalog(vm);
   catalog.bindVm();        // scripts can `await nano.catalog.install(...)`
   void catalog.rehydrate();
+  // Catalog sidebar: a searchable, installable app list. Renders when the signed
+  // index loads (non-blocking); each row installs into the running guest.
+  void catalog.mountSidebar({
+    list: document.getElementById("catalog")!,
+    hint: document.getElementById("catalog-hint")!,
+    filter: document.getElementById("catalog-filter") as HTMLInputElement,
+  });
   chrome.setSession("running");
   chrome.setStatus("live");
   chrome.setCwd("/");
@@ -246,6 +253,11 @@ async function main() {
   window.addEventListener("keydown", (e) => {
     // While the palette is open it owns the keyboard (its input handles nav).
     if (palette.open) return;
+
+    // Don't steal keystrokes while a chrome input (e.g. the catalog search) is
+    // focused — let the field handle them instead of forwarding to the guest tty.
+    const ae = document.activeElement as HTMLElement | null;
+    if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return;
 
     // UI shortcuts (⌘ on mac). ⌘ keystrokes are never forwarded to the guest.
     if (e.metaKey) {
