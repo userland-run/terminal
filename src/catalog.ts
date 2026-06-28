@@ -56,6 +56,31 @@ function installPct(e: InstallProgress): number {
   }
 }
 
+/** A curated bundle: a hand-picked workflow set, distinct from the auto-derived
+ *  topic categories. Members are app NAMES (version-resolved at install time).
+ *  Interim source of truth — the catalog will carry these canonically later. */
+export interface CuratedBundle {
+  slug: string;
+  title: string;
+  description: string;
+  members: string[];
+}
+
+const CURATED_BUNDLES: CuratedBundle[] = [
+  {
+    slug: "node-dev",
+    title: "Node dev toolchain",
+    description: "Node.js, TypeScript, ESLint, Prettier",
+    members: ["node", "typescript", "eslint", "prettier"],
+  },
+  {
+    slug: "git",
+    title: "Git workflow",
+    description: "gitoxide + delta diffs",
+    members: ["gix", "delta"],
+  },
+];
+
 export class TerminalCatalog {
   private readonly catalog = new Catalog();
 
@@ -187,10 +212,14 @@ export class TerminalCatalog {
   }
 
   /**
-   * Render the catalog into a sidebar panel: a searchable list of installable
-   * apps (and topic bundles). Each row installs into the running guest on click
-   * (echoing progress to the terminal) and reflects installed state with a ✓.
-   * Falls back to a note when the signed index is unreachable.
+   * Render the catalog into the sidebar panel as three distinct sections:
+   *  - Categories: browse facets (topics), derived live from the topic-bundle
+   *    manifests; clicking one filters the app list.
+   *  - Bundles: hand-curated workflow sets (e.g. a Node dev toolchain) that
+   *    install all their members.
+   *  - Apps: every index app, filtered by the active category + the search box.
+   * The app list + bundles render immediately; category chips light up once the
+   * bundle manifests resolve. Falls back to a note if the index is unreachable.
    */
   async mountSidebar(refs: { list: HTMLElement; hint: HTMLElement; filter?: HTMLInputElement }): Promise<void> {
     const { list, hint } = refs;
@@ -217,94 +246,174 @@ export class TerminalCatalog {
       list.appendChild(h);
     };
 
-    // One installable row. `kind` drives the install action; `ref` is the exact
-    // index key (name@version) or bundle slug used to install + to track state.
-    const row = (name: string, version: string, ref: string, kind: "app" | "bundle", isInstalled: boolean) => {
-      const btn = document.createElement("button");
-      btn.className = "catalog-row" + (kind === "bundle" ? " catalog-bundle" : "") + (isInstalled ? " installed" : "");
-      btn.dataset.search = `${name} ${version}`.toLowerCase();
-      btn.dataset.ref = ref;
-      btn.disabled = isInstalled;
-      btn.title = isInstalled ? `${name} — installed` : `install ${name}`;
-
-      const nameEl = document.createElement("span");
-      nameEl.className = "catalog-name";
-      nameEl.textContent = name;
-      const verEl = document.createElement("span");
-      verEl.className = "catalog-ver";
-      verEl.textContent = version;
-      const stateEl = document.createElement("span");
-      stateEl.className = "catalog-state";
-      stateEl.textContent = isInstalled ? "✓" : "+";
-      btn.append(nameEl, verEl, stateEl);
-
-      btn.addEventListener("click", async () => {
-        if (btn.disabled) return;
-        btn.disabled = true;
-        let ok: boolean;
-        if (kind === "bundle") {
-          // Indeterminate (member count isn't known up front) — pulse the row.
-          btn.classList.add("installing");
-          stateEl.textContent = "·";
-          ok = await this.installBundle(ref);
-          btn.classList.remove("installing");
-        } else {
-          // Determinate: fill the row background left→right and show the % in the
-          // version slot. Both live inside existing boxes, so nothing overflows.
-          const fill = (pct: number) => {
-            btn.style.backgroundImage =
-              `linear-gradient(to right, rgba(169,132,245,0.22) ${pct}%, transparent ${pct}%)`;
-            verEl.textContent = `${pct}%`;
-          };
-          fill(0);
-          ok = await this.install(ref, (e) => fill(installPct(e)));
-          btn.style.backgroundImage = "";
-          verEl.textContent = version; // restore the version label
-        }
-        if (ok) {
-          btn.classList.add("installed");
-          stateEl.textContent = "✓";
-          btn.title = `${name} — installed`;
-          if (kind === "bundle") this.refreshInstalled(list); // a bundle pulls in several apps
-        } else {
-          btn.disabled = false;
-          stateEl.textContent = "!";
-          btn.title = `install ${name} (failed — click to retry)`;
-        }
-      });
-      list.appendChild(btn);
+    // --- filter state: active category chip + the search box, combined ---
+    let activeCat = "";
+    const applyFilter = () => {
+      const q = (refs.filter?.value || "").trim().toLowerCase();
+      for (const el of list.querySelectorAll<HTMLElement>(".catalog-app")) {
+        const matchesQ = !q || (el.dataset.search || "").includes(q);
+        const matchesCat = !activeCat || (el.dataset.cats || "").split(" ").includes(activeCat);
+        el.style.display = matchesQ && matchesCat ? "" : "none";
+      }
     };
 
-    const bundles = Object.keys(idx.bundles || {}).sort();
-    if (bundles.length) {
+    // --- Categories (browse facet) — chips populated once manifests resolve ---
+    sub("Categories");
+    const chips = document.createElement("div");
+    chips.className = "catalog-cats";
+    list.appendChild(chips);
+    const chipEls: HTMLButtonElement[] = [];
+    const setActive = (slug: string) => {
+      activeCat = slug;
+      for (const c of chipEls) c.classList.toggle("active", c.dataset.cat === activeCat);
+      applyFilter();
+    };
+    const addChip = (slug: string, label: string) => {
+      const c = document.createElement("button");
+      c.className = "catalog-chip";
+      c.dataset.cat = slug;
+      c.textContent = label;
+      c.addEventListener("click", () => setActive(activeCat === slug ? "" : slug));
+      chipEls.push(c);
+      chips.appendChild(c);
+    };
+    addChip("", "All");
+    setActive("");
+
+    // --- Bundles (curated workflow sets) ---
+    const appNames = new Set(Object.keys(idx.apps).map((k: string) => k.split("@")[0]));
+    const curated = CURATED_BUNDLES
+      .map((cb) => ({ cb, members: cb.members.filter((m) => appNames.has(m)) }))
+      .filter((x) => x.members.length > 0);
+    if (curated.length) {
       sub("Bundles");
-      for (const slug of bundles) row(slug, "bundle", slug, "bundle", false);
+      for (const { cb, members } of curated) list.appendChild(this.curatedRow(cb, members, list));
     }
 
-    const apps = Object.keys(idx.apps).sort();
+    // --- Apps (filtered by category + search) ---
     sub("Apps");
-    for (const appKey of apps) {
+    const appRowByRef = new Map<string, HTMLElement>();
+    for (const appKey of Object.keys(idx.apps).sort()) {
       const at = appKey.lastIndexOf("@");
       const name = at > 0 ? appKey.slice(0, at) : appKey;
       const version = at > 0 ? appKey.slice(at + 1) : "";
-      row(name, version, appKey, "app", installed.has(appKey));
+      const row = this.appRow(name, version, appKey, installed.has(appKey), list);
+      appRowByRef.set(appKey, row);
+      list.appendChild(row);
     }
 
-    if (refs.filter) {
-      refs.filter.addEventListener("input", () => {
-        const q = refs.filter!.value.trim().toLowerCase();
-        for (const el of list.querySelectorAll<HTMLElement>(".catalog-row")) {
-          el.style.display = !q || (el.dataset.search || "").includes(q) ? "" : "none";
+    if (refs.filter) refs.filter.addEventListener("input", applyFilter);
+
+    // --- derive category membership from the topic-bundle manifests (the index
+    //     carries no per-app topics) and light up the chips + app data-cats ---
+    for (const slug of Object.keys(idx.bundles || {}).sort()) {
+      this.catalog.bundleManifest(slug).then((bm: any) => {
+        addChip(slug, bm.topic || slug);
+        for (const ref of bm.apps || []) {
+          const row = appRowByRef.get(ref);
+          if (!row) continue;
+          row.dataset.cats = `${row.dataset.cats || ""} ${slug}`.trim();
         }
-      });
+      }).catch(() => { /* skip a bad/unreachable bundle */ });
     }
   }
 
-  /** Re-mark app rows now present in the persisted record (e.g. after a bundle
-   *  install pulled several apps in at once). */
+  /** An installable app row with determinate install progress (background fill +
+   *  % in the version slot). */
+  private appRow(name: string, version: string, ref: string, isInstalled: boolean, list: HTMLElement): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.className = "catalog-row catalog-app" + (isInstalled ? " installed" : "");
+    btn.dataset.search = `${name} ${version}`.toLowerCase();
+    btn.dataset.ref = ref;
+    btn.dataset.cats = "";
+    btn.disabled = isInstalled;
+    btn.title = isInstalled ? `${name} — installed` : `install ${name}`;
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "catalog-name";
+    nameEl.textContent = name;
+    const verEl = document.createElement("span");
+    verEl.className = "catalog-ver";
+    verEl.textContent = version;
+    const stateEl = document.createElement("span");
+    stateEl.className = "catalog-state";
+    stateEl.textContent = isInstalled ? "✓" : "+";
+    btn.append(nameEl, verEl, stateEl);
+
+    btn.addEventListener("click", async () => {
+      if (btn.disabled) return;
+      btn.disabled = true;
+      const fill = (pct: number) => {
+        btn.style.backgroundImage =
+          `linear-gradient(to right, rgba(169,132,245,0.22) ${pct}%, transparent ${pct}%)`;
+        verEl.textContent = `${pct}%`;
+      };
+      fill(0);
+      const ok = await this.install(ref, (e) => fill(installPct(e)));
+      btn.style.backgroundImage = "";
+      verEl.textContent = version;
+      if (ok) {
+        btn.classList.add("installed");
+        stateEl.textContent = "✓";
+        btn.title = `${name} — installed`;
+      } else {
+        btn.disabled = false;
+        stateEl.textContent = "!";
+        btn.title = `install ${name} (failed — click to retry)`;
+      }
+    });
+    return btn;
+  }
+
+  /** A curated-bundle row (title + description) that installs every member app. */
+  private curatedRow(cb: CuratedBundle, members: string[], list: HTMLElement): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.className = "catalog-row catalog-curated";
+    btn.dataset.search = `${cb.title} ${cb.slug} ${members.join(" ")}`.toLowerCase();
+    btn.title = `install ${cb.title}: ${members.join(", ")}`;
+
+    const meta = document.createElement("div");
+    meta.className = "catalog-meta";
+    const nameEl = document.createElement("div");
+    nameEl.className = "catalog-name";
+    nameEl.textContent = cb.title;
+    const descEl = document.createElement("div");
+    descEl.className = "catalog-desc";
+    descEl.textContent = cb.description;
+    meta.append(nameEl, descEl);
+    const stateEl = document.createElement("span");
+    stateEl.className = "catalog-state";
+    stateEl.textContent = "+";
+    btn.append(meta, stateEl);
+
+    btn.addEventListener("click", async () => {
+      if (btn.disabled) return;
+      btn.disabled = true;
+      btn.classList.add("installing");
+      stateEl.textContent = "·";
+      this.echo(`\ninstalling the ${cb.title} bundle (${members.join(", ")})…\n`);
+      let okCount = 0;
+      for (const m of members) if (await this.install(m)) okCount++;
+      btn.classList.remove("installing");
+      this.refreshInstalled(list);
+      if (okCount === members.length) {
+        btn.classList.add("installed");
+        stateEl.textContent = "✓";
+        btn.title = `${cb.title} — installed`;
+      } else {
+        btn.disabled = false;
+        stateEl.textContent = okCount ? "✓" : "!";
+        btn.title = `${cb.title} — ${okCount}/${members.length} installed (click to retry)`;
+      }
+    });
+    return btn;
+  }
+
+  /** Re-mark app rows now present in the persisted record (e.g. after a curated
+   *  bundle pulled several apps in at once). */
   private refreshInstalled(list: HTMLElement): void {
     const installed = new Set(loadRecord());
-    for (const el of list.querySelectorAll<HTMLButtonElement>(".catalog-row:not(.catalog-bundle)")) {
+    for (const el of list.querySelectorAll<HTMLButtonElement>(".catalog-app")) {
       const ref = el.dataset.ref;
       if (ref && installed.has(ref) && !el.classList.contains("installed")) {
         el.classList.add("installed");

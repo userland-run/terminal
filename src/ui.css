@@ -318,6 +318,47 @@ kbd {
 .catalog-row.installing .catalog-state { color: var(--primary); }
 .catalog-row.installed .catalog-state { color: var(--ok); }
 
+/* category chips (browse facet) */
+.catalog-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 4px 4px;
+}
+.catalog-chip {
+  font-family: var(--font-sans);
+  font-size: 9.5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--muted-fg);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.catalog-chip:hover { background: var(--row-hover); color: var(--fg); }
+.catalog-chip.active {
+  background: var(--selected);
+  border-color: var(--primary);
+  color: #d9ccfb;
+}
+
+/* curated bundle rows (two lines: title + description) */
+.catalog-curated { align-items: flex-start; }
+.catalog-meta { flex: 1; min-width: 0; }
+.catalog-curated .catalog-name { font-weight: 500; color: #cfcfe0; }
+.catalog-desc {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--muted-fg);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.catalog-curated .catalog-state { margin-top: 1px; }
+
 /* — terminal area — */
 #terminal-area {
   grid-row: 2;
