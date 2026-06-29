@@ -15,6 +15,7 @@ import { FilesPanel } from "./files";
 import { LocalMounts } from "./localfs";
 import { Tabs } from "./tabs";
 import { renderChromeIcons } from "./icons";
+import { installTooltips } from "./tooltip";
 import { normalizeConfig, type TerminalConfig } from "./config";
 import {
   pixelToCell,
@@ -58,6 +59,7 @@ export async function createTerminal(
   if (!root) throw new Error(`createTerminal: target not found: ${String(target)}`);
 
   renderChromeIcons(); // swap the static [data-lucide] placeholders for Lucide SVGs
+  installTooltips(); // styled tooltips for every titled control
   const chrome = new Chrome();
   // The terminal lives in one tab of the main pane; its tab-pane (#term-pane),
   // not #terminal-area, is what sizes the grid (the tab strip takes height too).

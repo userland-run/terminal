@@ -521,6 +521,32 @@ kbd {
   flex: none;
 }
 
+/* — tooltip — */
+#tooltip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 10000;
+  pointer-events: none;
+  max-width: 240px;
+  padding: 2px 6px;
+  background: var(--elevated);
+  border: 1px solid var(--popover-border);
+  border-radius: 5px;
+  box-shadow: var(--shadow-pop);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 9.5px;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(-3px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+#tooltip.above { transform: translateY(3px); }
+#tooltip.show { opacity: 1; transform: translateY(0); }
+
 /* — terminal area (tabbed: Terminal / Editor / Preview) — */
 #terminal-area {
   grid-row: 2;
