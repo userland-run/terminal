@@ -154,7 +154,7 @@ export class FilesPanel {
 
     const isDir = entry.type === "dir";
     if (isDir) {
-      const tw = svg(ICON.chevron, 11);
+      const tw = svg(ICON.chevron, 13);
       tw.classList.add("file-twist");
       if (this.expanded.has(path)) tw.classList.add("open");
       row.append(tw);
@@ -164,7 +164,7 @@ export class FilesPanel {
       row.append(spacer);
     }
 
-    row.append(svg(isDir ? ICON.folder : ICON.file, 13));
+    row.append(svg(isDir ? ICON.folder : ICON.file, 16));
 
     const name = document.createElement("span");
     name.className = "file-name";
@@ -356,7 +356,7 @@ export class FilesPanel {
     b.className = "files-tool";
     b.title = title;
     b.setAttribute("aria-label", title);
-    b.append(svg(path, 15));
+    b.append(svg(path, 16));
     b.addEventListener("click", onClick);
     return b;
   }
@@ -370,7 +370,7 @@ export class FilesPanel {
     b.className = "file-act";
     b.title = title;
     b.setAttribute("aria-label", title);
-    b.append(svg(path, 12));
+    b.append(svg(path, 14));
     b.addEventListener("click", onClick);
     return b;
   }

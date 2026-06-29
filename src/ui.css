@@ -44,7 +44,8 @@
   --shadow-pop: 0 6px 20px rgba(0, 0, 0, 0.45);
   --caret-rate: 530ms;
 
-  --font-sans: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  /* All UI type is JetBrains Mono (chrome labels included), per the brand. */
+  --font-sans: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
 }
 
@@ -426,14 +427,16 @@ kbd {
   flex-direction: column;
 }
 .file-row {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
+  min-height: 24px;
   padding: 3px 6px 3px 8px;
   border-radius: var(--radius-md);
   cursor: pointer;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: 11.5px;
   color: #c4c4cc;
   user-select: none;
   transition: background-color 0.1s;
@@ -449,7 +452,7 @@ kbd {
   transition: transform 0.12s ease;
 }
 .file-twist.open { transform: rotate(90deg); }
-.file-twist-spacer { width: 11px; flex: none; }
+.file-twist-spacer { width: 13px; flex: none; }
 .file-name {
   flex: 1;
   min-width: 0;
@@ -457,18 +460,36 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Absolutely positioned so revealing them on hover never reflows/shifts the tree. */
 .file-actions {
-  flex: none;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
   display: none;
+  align-items: center;
   gap: 1px;
+  padding: 0 4px 0 8px;
+  background: var(--row-hover);
 }
+.file-actions::before {
+  content: "";
+  position: absolute;
+  left: -14px;
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  background: linear-gradient(to right, transparent, var(--row-hover));
+}
+.file-row.selected .file-actions { background: var(--selected); }
+.file-row.selected .file-actions::before { background: linear-gradient(to right, transparent, var(--selected)); }
 .file-row:hover .file-actions { display: inline-flex; }
 .file-act {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 18px;
+  width: 22px;
+  height: 20px;
   border: none;
   background: none;
   color: var(--label);
