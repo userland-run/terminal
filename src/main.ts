@@ -11,6 +11,10 @@ import { Chrome } from "./chrome";
 import { CommandBar } from "./commandbar";
 import { TerminalCatalog } from "./catalog";
 import { A11yMirror } from "./a11y";
+import { FilesPanel } from "./files";
+import { LocalMounts } from "./localfs";
+import { Tabs } from "./tabs";
+import { normalizeConfig, type TerminalConfig } from "./config";
 import {
   pixelToCell,
   isEmptySelection,
@@ -18,7 +22,6 @@ import {
   type Selection,
 } from "./selection";
 
-const DEFAULT_FONT_PX = 12; // matches the style-guide comp's terminal text scale
 const MIN_FONT_PX = 9;
 const MAX_FONT_PX = 28;
 const MAX_COLS = 200; // must match src/term.rs MAX_COLS
@@ -27,16 +30,43 @@ const PAD = 12; // #terminal-area padding (var(--space-3)) — keep in sync with
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-async function main() {
+/** Handle returned by {@link createTerminal} for programmatic control. */
+export interface TerminalHandle {
+  /** The running NanoVM instance (read/write the VFS, run commands). */
+  vm: NanoVM;
+  /** Open a guest file in the Editor tab (no-op if the editor is disabled). */
+  openFile: (path: string) => void;
+  /** Reveal the Preview tab on a port (no-op if preview is disabled). */
+  showPreview: (port?: number) => void;
+  /** Re-list the Files panel tree (after external FS changes). */
+  refreshFiles: () => void;
+}
+
+/**
+ * Mount a composable terminal into `target` (a selector or element; defaults to
+ * `#app`). Every feature is gated by `config.features.*` — see {@link TerminalConfig}.
+ * Resolves once the VM has booted and the interactive session has launched,
+ * returning a {@link TerminalHandle} for programmatic control.
+ */
+export async function createTerminal(
+  target: string | HTMLElement = "#app",
+  userConfig: TerminalConfig = {},
+): Promise<TerminalHandle> {
+  const cfg = normalizeConfig(userConfig);
+  const root = typeof target === "string" ? document.querySelector(target) : target;
+  if (!root) throw new Error(`createTerminal: target not found: ${String(target)}`);
+
   const chrome = new Chrome();
-  const area = document.getElementById("terminal-area") as HTMLElement;
+  // The terminal lives in one tab of the main pane; its tab-pane (#term-pane),
+  // not #terminal-area, is what sizes the grid (the tab strip takes height too).
+  const area = document.getElementById("term-pane") as HTMLElement;
   const canvas = document.getElementById("screen") as HTMLCanvasElement;
   const a11y = new A11yMirror(document.body);
 
   // Cell metrics depend on the real font; wait for it before measuring.
   try {
-    await document.fonts.load(`${DEFAULT_FONT_PX}px "JetBrains Mono"`);
-    await document.fonts.load(`700 ${DEFAULT_FONT_PX}px "JetBrains Mono"`);
+    await document.fonts.load(`${cfg.fontPx}px "JetBrains Mono"`);
+    await document.fonts.load(`700 ${cfg.fontPx}px "JetBrains Mono"`);
   } catch {
     /* fall back to system monospace */
   }
@@ -44,15 +74,15 @@ async function main() {
   // Prefer WebGPU; fall back to the 2D canvas.
   let renderer: TermRenderer;
   try {
-    renderer = await GpuRenderer.create(canvas, DEFAULT_FONT_PX);
+    renderer = await GpuRenderer.create(canvas, cfg.fontPx);
     chrome.setRenderer("WebGPU");
   } catch (e) {
     console.warn("[console] WebGPU unavailable — falling back to 2D canvas:", e);
-    renderer = new CanvasRenderer(canvas, DEFAULT_FONT_PX);
+    renderer = new CanvasRenderer(canvas, cfg.fontPx);
     chrome.setRenderer("Canvas2D");
   }
 
-  let fontPx = DEFAULT_FONT_PX;
+  let fontPx = cfg.fontPx;
   renderer.measure();
 
   // Grid that fits the terminal pane at the current cell metrics.
@@ -67,26 +97,90 @@ async function main() {
   renderer.resize(cols, rows);
   chrome.setGrid(cols, rows);
 
-  const vm = await NanoVM.create({ ramMB: 256, wasm: "/nano.wasm" });
+  const vm = await NanoVM.create({ ramMB: cfg.ramMB, wasm: cfg.wasmUrl });
   vm.termInit(cols, rows);
   vm.setTty(true); // real guest tty: isatty=true, in-VM echo + line discipline
 
   // Catalog: re-install anything the user installed in a prior session (chunks
   // come from the OPFS cache, so this is fast/offline). Non-blocking — the shell
   // is usable immediately; installed binaries appear in the VFS as they land.
-  const catalog = new TerminalCatalog(vm);
-  catalog.bindVm();        // scripts can `await nano.catalog.install(...)`
-  void catalog.rehydrate();
-  // Catalog sidebar: a searchable, installable app list. Renders when the signed
-  // index loads (non-blocking); each row installs into the running guest.
-  void catalog.mountSidebar({
-    list: document.getElementById("catalog")!,
-    hint: document.getElementById("catalog-hint")!,
-    filter: document.getElementById("catalog-filter") as HTMLInputElement,
-  });
+  let catalog: TerminalCatalog | null = null;
+  if (cfg.features.catalog) {
+    catalog = new TerminalCatalog(vm);
+    catalog.bindVm();        // scripts can `await nano.catalog.install(...)`
+    void catalog.rehydrate();
+    // Catalog sidebar: a searchable, installable app list. Renders when the signed
+    // index loads (non-blocking); each row installs into the running guest.
+    void catalog.mountSidebar({
+      list: document.getElementById("catalog")!,
+      hint: document.getElementById("catalog-hint")!,
+      filter: document.getElementById("catalog-filter") as HTMLInputElement,
+    });
+  } else {
+    chrome.setViewEnabled("catalog", false);
+  }
+
+  // Files panel: a lazy file tree over the guest VFS with CRUD, plus (where the
+  // browser supports the File System Access API) mapping local files/folders in.
+  // Row clicks route to the Editor tab once it exists (wired in via openInEditor).
+  let openInEditor: (path: string) => void = () => {};
+  let files: FilesPanel | null = null;
+  const localMounts = cfg.features.files ? new LocalMounts(vm) : null;
+  if (cfg.features.files) {
+    files = new FilesPanel(vm, {
+      onOpenFile: (path) => openInEditor(path),
+      localMounts: localMounts ?? undefined,
+    });
+    files.mount(document.getElementById("files")!);
+  } else {
+    chrome.setViewEnabled("files", false);
+  }
+
+  // Single active sidebar view (VS Code-style activity bar).
+  chrome.activateDefaultView();
+
   chrome.setSession("running");
   chrome.setStatus("live");
   chrome.setCwd("/");
+
+  // Reflect the guest's real working directory in the Files header + footer.
+  // cwd() is a cheap SAB read; poll on an interval (not per frame) since it can
+  // flicker between the shell and a foreground child.
+  let lastCwd = "/";
+  let lastInsns = 0;
+  let lastSampleAt = Date.now();
+  const fmtIps = (ips: number): string => {
+    if (ips >= 1e9) return `${(ips / 1e9).toFixed(1)}G`;
+    if (ips >= 1e6) return `${Math.round(ips / 1e6)}M`;
+    if (ips >= 1e3) return `${Math.round(ips / 1e3)}K`;
+    return String(Math.round(ips));
+  };
+  setInterval(() => {
+    // Live working directory (cheap SAB read; can flicker shell↔child).
+    try {
+      const cwd = vm.cwd();
+      if (cwd && cwd !== lastCwd) {
+        lastCwd = cwd;
+        chrome.setCwd(cwd);
+      }
+    } catch {
+      /* transient */
+    }
+    // Guest instructions/sec.
+    const now = Date.now();
+    const insns = vm.instructionCount();
+    const dt = (now - lastSampleAt) / 1000;
+    if (dt > 0 && lastInsns > 0) chrome.setMips(fmtIps((insns - lastInsns) / dt));
+    lastInsns = insns;
+    lastSampleAt = now;
+    // Open-port / serving indicator.
+    if (vm.serving) {
+      const p = vm.servingPort;
+      chrome.setServing(p != null ? `:${p}` : "serving");
+    } else {
+      chrome.setServing(null);
+    }
+  }, 1000);
 
   // Live uptime in the footer (the one stat we can source honestly client-side;
   // MIPS/heap/proc need VM introspection the host doesn't yet expose).
@@ -103,6 +197,10 @@ async function main() {
   let refitQueued = false;
   const refit = (force: boolean) => {
     refitQueued = false;
+    // The Terminal tab may be hidden (Editor/Preview active) → 0-width pane.
+    // computeGrid would clamp to a 1×1 grid and SIGWINCH-corrupt the live shell,
+    // so skip while hidden; we refit(true) when the tab is shown again.
+    if (area.clientWidth === 0 || area.offsetParent === null) return;
     const next = computeGrid();
     const gridChanged = next.cols !== cols || next.rows !== rows;
     if (!gridChanged && !force) return;
@@ -119,6 +217,74 @@ async function main() {
   };
 
   new ResizeObserver(relayoutSoon).observe(area);
+
+  // Editor tab (CodeMirror) — the module + its bundle load lazily on first open,
+  // so they never weigh on boot. Declared here so the tab-close handler can reach it.
+  let editor: import("./editor").EditorTab | null = null;
+  // Preview tab (server-app iframe). Declared here so the tab handlers reach it.
+  let preview: import("./preview").PreviewPanel | null = null;
+
+  // Tab strip over the main pane. Switching back to Terminal returns keyboard
+  // focus to the guest (blur any editor/iframe) and refits the now-visible grid.
+  const tabs = new Tabs({
+    onSwitch: (t) => {
+      if (t === "terminal") {
+        (document.activeElement as HTMLElement | null)?.blur();
+        requestAnimationFrame(() => refit(true));
+      } else if (t === "preview") {
+        preview?.ensureLoaded();
+      }
+    },
+    onClose: (t) => {
+      if (t === "editor") {
+        editor?.close();
+        tabs.hide("editor");
+      }
+    },
+  });
+
+  // Preview tab (server-app iframe over the in-VM HTTP server). The serve bridge
+  // (service worker) registers early so it's controlling before the first load.
+  if (cfg.features.preview.enabled) {
+    const { PreviewPanel } = await import("./preview");
+    preview = new PreviewPanel({
+      host: document.getElementById("preview-host")!,
+      vm,
+      serviceWorkerUrl: cfg.serviceWorkerUrl,
+      ports: cfg.features.preview.ports,
+      defaultPort: cfg.features.preview.defaultPort,
+      reveal: () => {
+        tabs.reveal("preview");
+        tabs.show("preview");
+      },
+    });
+    void preview.init();
+    tabs.reveal("preview"); // visible so the user can open a preview anytime
+  }
+
+  // Wire file-open → Editor tab (gated by config.features.editor).
+  if (cfg.features.editor) {
+    openInEditor = async (path: string) => {
+      if (!editor) {
+        const { EditorTab } = await import("./editor");
+        editor = new EditorTab({
+          host: document.getElementById("editor-host")!,
+          vm,
+          localMounts: localMounts ?? undefined,
+          reveal: (label) => {
+            tabs.reveal("editor");
+            tabs.setEditorLabel(label);
+            tabs.show("editor");
+          },
+          setStatus: (s) => {
+            chrome.setStatus(s);
+            setTimeout(() => chrome.setStatus(tabs.current === "terminal" ? "live" : s), 1400);
+          },
+        });
+      }
+      editor.open(path);
+    };
+  }
 
   const setFont = (px: number) => {
     px = clamp(px, MIN_FONT_PX, MAX_FONT_PX);
@@ -226,33 +392,36 @@ async function main() {
   };
 
   // — Cmd-K command palette —
-  const palette = new CommandBar([
-    { id: "clear", title: "Clear screen", hint: "clear", run: () => vm.writeStdin("clear\r") },
-    { id: "copy-sel", title: "Copy selection", hint: "⌘C", run: copySelection },
-    { id: "copy-all", title: "Copy all visible", run: copyAll },
-    { id: "font-inc", title: "Increase font size", hint: "⌘+", run: () => setFont(fontPx + 1) },
-    { id: "font-dec", title: "Decrease font size", hint: "⌘-", run: () => setFont(fontPx - 1) },
-    { id: "font-reset", title: "Reset font size", hint: "⌘0", run: () => setFont(DEFAULT_FONT_PX) },
-    { id: "sidebar", title: "Toggle sidebar", hint: "⌘B", run: toggleSidebar },
-  ]);
+  let palette: CommandBar | null = null;
+  if (cfg.features.palette) {
+    palette = new CommandBar([
+      { id: "clear", title: "Clear screen", hint: "clear", run: () => vm.writeStdin("clear\r") },
+      { id: "copy-sel", title: "Copy selection", hint: "⌘C", run: copySelection },
+      { id: "copy-all", title: "Copy all visible", run: copyAll },
+      { id: "font-inc", title: "Increase font size", hint: "⌘+", run: () => setFont(fontPx + 1) },
+      { id: "font-dec", title: "Decrease font size", hint: "⌘-", run: () => setFont(fontPx - 1) },
+      { id: "font-reset", title: "Reset font size", hint: "⌘0", run: () => setFont(cfg.fontPx) },
+      { id: "sidebar", title: "Toggle sidebar", hint: "⌘B", run: toggleSidebar },
+    ]);
 
-  // Catalog actions (browse / show-installed + one install entry per index app).
-  // Fetched async so the palette is usable immediately; entries appear when the
-  // signed index loads.
-  void catalog.commands().then((cmds) => palette.addCommands(cmds));
+    // Catalog actions (browse / show-installed + one install entry per index app).
+    // Fetched async so the palette is usable immediately; entries appear when the
+    // signed index loads.
+    if (catalog) void catalog.commands().then((cmds) => palette!.addCommands(cmds));
+  }
 
   // Top-bar ⊘/⟳/⚙ + settings-popover rows. Restart fully re-creates the VM by
   // reloading — the honest "reboot" until the host exposes a soft reset.
   chrome.bindActions({
     onClear: () => vm.writeStdin("clear\r"),
     onRestart: () => location.reload(),
-    onPalette: () => palette.show(),
+    onPalette: () => palette?.show(),
   });
 
   // — input —
   window.addEventListener("keydown", (e) => {
     // While the palette is open it owns the keyboard (its input handles nav).
-    if (palette.open) return;
+    if (palette?.open) return;
 
     // Don't steal keystrokes while a chrome input (e.g. the catalog search) is
     // focused — let the field handle them instead of forwarding to the guest tty.
@@ -262,12 +431,12 @@ async function main() {
     // UI shortcuts (⌘ on mac). ⌘ keystrokes are never forwarded to the guest.
     if (e.metaKey) {
       const k = e.key.toLowerCase();
-      if (k === "k") palette.toggle();
+      if (k === "k") palette?.toggle();
       else if (k === "b") toggleSidebar();
       else if (k === "c") copySelection();
       else if (k === "=" || k === "+") setFont(fontPx + 1);
       else if (k === "-") setFont(fontPx - 1);
-      else if (k === "0") setFont(DEFAULT_FONT_PX);
+      else if (k === "0") setFont(cfg.fontPx);
       else return; // leave other ⌘ combos to the browser
       e.preventDefault();
       return;
@@ -308,13 +477,18 @@ async function main() {
     e.preventDefault();
   });
 
-  // Boot an interactive shell. The run loop yields to the event loop (and parks
-  // on empty stdin), so rendering and keystrokes keep flowing.
-  vm.run("sh -i", { maxSteps: 5_000_000_000 }).then((r) => {
+  // Boot the interactive session. The run loop yields to the event loop (and
+  // parks on empty stdin), so rendering and keystrokes keep flowing.
+  vm.run(cfg.shellCommand, { maxSteps: 5_000_000_000 }).then((r) => {
     vm.termEcho(`\r\n[shell exited: ${r.exitCode}]\r\n`);
     chrome.setSession(`exited ${r.exitCode}`);
     chrome.setStatus("done");
   });
-}
 
-main();
+  return {
+    vm,
+    openFile: (path: string) => void openInEditor(path),
+    showPreview: (port?: number) => preview?.open(port),
+    refreshFiles: () => files?.refresh(),
+  };
+}

@@ -26,17 +26,23 @@ export class Chrome {
   private statRenderer = el("stat-renderer");
   private statStatus = el("stat-status");
   private statUptime = el("stat-uptime");
+  private statIps = el("stat-ips");
+  private statPort = el("stat-port");
+  private statPortSep = el("stat-port-sep");
   private statCwd = el("stat-cwd");
   private sessionState = el("session-state");
   private cwd = el("cwd");
   private settings = el("settings-popover");
 
+  private activeView: string | null = null;
+  private readonly enabledViews = new Set<string>(["files", "catalog", "sessions"]);
+
   constructor() {
-    // Collapsible sidebar sections (Sessions / Files).
-    for (const head of document.querySelectorAll<HTMLElement>(".panel-head")) {
-      head.addEventListener("click", () => {
-        const id = head.dataset.panel;
-        if (id) document.getElementById(id)?.classList.toggle("collapsed");
+    // VS Code-style activity bar: each icon switches the single active view.
+    for (const btn of document.querySelectorAll<HTMLElement>(".activity-btn")) {
+      btn.addEventListener("click", () => {
+        const v = btn.dataset.view;
+        if (v) this.showView(v);
       });
     }
     // Dismiss the settings popover on outside click / Escape.
@@ -65,6 +71,17 @@ export class Chrome {
   setUptime(text: string) {
     this.statUptime.textContent = text;
   }
+  /** Guest instructions/sec readout (footer), e.g. "96M". */
+  setMips(text: string) {
+    this.statIps.firstChild!.textContent = text + " ";
+  }
+  /** Footer serving indicator: pass a label (":8080" / "serving") or null to hide. */
+  setServing(label: string | null) {
+    const on = label != null;
+    this.statPort.hidden = !on;
+    this.statPortSep.hidden = !on;
+    if (on) this.statPort.textContent = `● ${label}`;
+  }
   setSession(text: string) {
     this.sessionState.textContent = text;
   }
@@ -75,6 +92,35 @@ export class Chrome {
 
   toggleSidebar() {
     this.app.classList.toggle("sidebar-collapsed");
+  }
+
+  /** Show one sidebar view (Files / Catalog / Sessions); hide the rest. */
+  showView(view: string) {
+    if (!this.enabledViews.has(view)) return;
+    this.activeView = view;
+    for (const p of document.querySelectorAll<HTMLElement>(".sidebar-views .panel")) {
+      p.classList.toggle("active", p.dataset.view === view);
+    }
+    for (const b of document.querySelectorAll<HTMLElement>(".activity-btn")) {
+      const on = b.dataset.view === view;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-pressed", String(on));
+    }
+  }
+
+  /** Enable/disable a view (its activity-bar icon + panel) for feature gating. */
+  setViewEnabled(view: string, enabled: boolean) {
+    if (enabled) this.enabledViews.add(view);
+    else this.enabledViews.delete(view);
+    const btn = document.querySelector<HTMLElement>(`.activity-btn[data-view="${view}"]`);
+    if (btn) btn.style.display = enabled ? "" : "none";
+    if (!enabled && this.activeView === view) this.activeView = null;
+  }
+
+  /** Activate the first enabled view (Files first, then Catalog, then Sessions). */
+  activateDefaultView() {
+    const first = ["files", "catalog", "sessions"].find((v) => this.enabledViews.has(v));
+    if (first) this.showView(first);
   }
 
   /** Wire the ☰ button; caller may also bind a keyboard shortcut. */

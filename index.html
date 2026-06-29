@@ -35,48 +35,77 @@
       </header>
 
       <aside id="sidebar">
-        <section class="panel" id="panel-sessions">
-          <div class="panel-head" data-panel="panel-sessions">
-            <svg class="twist" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6 L15 12 L9 18"></path></svg>
-            <span class="panel-label">Sessions</span>
-          </div>
-          <div class="panel-body">
-            <ul id="sessions" class="list">
-              <li class="session-row active">
-                <svg class="session-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"></rect><path d="M7.5 10 L10.2 12.5 L7.5 15"></path><path d="M12.5 15 L16.5 15"></path></svg>
-                <div class="session-meta">
-                  <div class="session-name">sh</div>
-                  <div class="session-cwd" id="session-state">booting…</div>
-                </div>
-              </li>
-            </ul>
-          </div>
-        </section>
-        <section class="panel" id="panel-catalog">
-          <div class="panel-head" data-panel="panel-catalog">
-            <svg class="twist" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6 L15 12 L9 18"></path></svg>
-            <span class="panel-label">Catalog</span>
-            <span class="panel-hint" id="catalog-hint"></span>
-          </div>
-          <div class="panel-body">
-            <input id="catalog-filter" class="catalog-filter" type="text" placeholder="Search apps…" autocomplete="off" spellcheck="false" />
-            <div id="catalog" class="catalog-list"><div class="muted-note">loading catalog…</div></div>
-          </div>
-        </section>
-        <section class="panel" id="panel-files">
-          <div class="panel-head" data-panel="panel-files">
-            <svg class="twist" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6 L15 12 L9 18"></path></svg>
-            <span class="panel-label">Files</span>
-            <span class="panel-hint" id="cwd">/</span>
-          </div>
-          <div class="panel-body">
-            <div id="files" class="muted-note">Live file tree — coming in a later phase.</div>
-          </div>
-        </section>
+        <nav class="activity-bar" aria-label="Views">
+          <button class="activity-btn" data-view="files" title="Files" aria-label="Files">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.5 H9.5 L11.5 9 H20.5 V18.5 H3.5 Z"></path></svg>
+          </button>
+          <button class="activity-btn" data-view="catalog" title="Catalog" aria-label="Catalog">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.4"></rect><rect x="13" y="4" width="7" height="7" rx="1.4"></rect><rect x="4" y="13" width="7" height="7" rx="1.4"></rect><rect x="13" y="13" width="7" height="7" rx="1.4"></rect></svg>
+          </button>
+          <button class="activity-btn" data-view="sessions" title="Sessions" aria-label="Sessions">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"></rect><path d="M7.5 10 L10.2 12.5 L7.5 15"></path><path d="M12.5 15 L16.5 15"></path></svg>
+          </button>
+        </nav>
+        <div class="sidebar-views">
+          <section class="panel" id="panel-files" data-view="files">
+            <div class="panel-head">
+              <span class="panel-label">Files</span>
+              <span class="panel-hint" id="cwd">/</span>
+            </div>
+            <div class="panel-body">
+              <div id="files" class="muted-note">Live file tree — coming in a later phase.</div>
+            </div>
+          </section>
+          <section class="panel" id="panel-catalog" data-view="catalog">
+            <div class="panel-head">
+              <span class="panel-label">Catalog</span>
+              <span class="panel-hint" id="catalog-hint"></span>
+            </div>
+            <div class="panel-body">
+              <input id="catalog-filter" class="catalog-filter" type="text" placeholder="Search apps…" autocomplete="off" spellcheck="false" />
+              <div id="catalog" class="catalog-list"><div class="muted-note">loading catalog…</div></div>
+            </div>
+          </section>
+          <section class="panel" id="panel-sessions" data-view="sessions">
+            <div class="panel-head">
+              <span class="panel-label">Sessions</span>
+            </div>
+            <div class="panel-body">
+              <ul id="sessions" class="list">
+                <li class="session-row active">
+                  <svg class="session-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"></rect><path d="M7.5 10 L10.2 12.5 L7.5 15"></path><path d="M12.5 15 L16.5 15"></path></svg>
+                  <div class="session-meta">
+                    <div class="session-name">sh</div>
+                    <div class="session-cwd" id="session-state">booting…</div>
+                  </div>
+                </li>
+              </ul>
+            </div>
+          </section>
+        </div>
       </aside>
 
       <main id="terminal-area">
-        <canvas id="screen"></canvas>
+        <div class="tabstrip" id="tabstrip" role="tablist">
+          <button class="tab active" data-tab="terminal" role="tab" aria-selected="true">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"></rect><path d="M7.5 10 L10.2 12.5 L7.5 15"></path><path d="M12.5 15 L16.5 15"></path></svg>
+            <span>Terminal</span>
+          </button>
+          <button class="tab" data-tab="editor" role="tab" aria-selected="false" hidden>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7 L5 12 L9 17 M15 7 L19 12 L15 17"></path></svg>
+            <span class="tab-label">Editor</span>
+            <span class="tab-close" data-close="editor" title="Close" aria-label="Close editor">×</span>
+          </button>
+          <button class="tab" data-tab="preview" role="tab" aria-selected="false" hidden>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"></circle><path d="M3.5 12 H20.5 M12 3.5 C14.5 6 14.5 18 12 20.5 C9.5 18 9.5 6 12 3.5"></path></svg>
+            <span>Preview</span>
+          </button>
+        </div>
+        <div class="tab-host">
+          <div class="tab-pane active" data-tab="terminal" id="term-pane"><canvas id="screen"></canvas></div>
+          <div class="tab-pane" data-tab="editor" id="editor-host"></div>
+          <div class="tab-pane" data-tab="preview" id="preview-host"></div>
+        </div>
       </main>
 
       <footer id="footer">
@@ -86,7 +115,11 @@
         <span class="sep">·</span>
         <span class="stat"><span class="lbl">up</span> <span id="stat-uptime">00:00:00</span></span>
         <span class="sep">·</span>
+        <span class="stat" id="stat-ips" title="guest instructions per second">— <span class="lbl">ips</span></span>
+        <span class="sep">·</span>
         <span class="stat status"><span class="dot"></span><span id="stat-status">booting</span></span>
+        <span class="sep port-sep" id="stat-port-sep" hidden>·</span>
+        <span class="stat port" id="stat-port" title="a server is listening" hidden></span>
         <div class="spacer"></div>
         <span class="stat" id="stat-renderer">—</span>
         <span class="sep">·</span>
@@ -123,6 +156,11 @@
       </div>
     </div>
 
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module">
+      import { createTerminal } from "/src/main.ts";
+      // Standalone bootstrap: all features on (the createTerminal defaults).
+      // Embedders import createTerminal and pass a TerminalConfig to compose.
+      createTerminal("#app").then((t) => { window.__terminal = t; });
+    </script>
   </body>
 </html>

@@ -12,3 +12,6 @@ public/nano.wasm
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# Synced from the SDK by the predev/prebuild sync-sw script — not checked in.
+public/nano-sw.js
