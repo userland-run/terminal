@@ -10,6 +10,7 @@
 // @ts-ignore — @sdk resolves to the built SDK bundle (vite alias); tsc can't see it.
 import { ServeBridge } from "@sdk";
 import type { NanoVM } from "@container/nanovm.mjs";
+import { I, icon } from "./icons";
 
 interface Bridge {
   previewUrl(port: number, path?: string): string;
@@ -24,22 +25,6 @@ export interface PreviewPanelOptions {
   /** Reveal + activate the Preview tab. */
   reveal: () => void;
 }
-
-const svg = (path: string): SVGSVGElement => {
-  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  s.setAttribute("width", "16");
-  s.setAttribute("height", "16");
-  s.setAttribute("viewBox", "0 0 24 24");
-  s.setAttribute("fill", "none");
-  s.setAttribute("stroke", "currentColor");
-  s.setAttribute("stroke-width", "1.7");
-  s.setAttribute("stroke-linecap", "round");
-  s.setAttribute("stroke-linejoin", "round");
-  const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  p.setAttribute("d", path);
-  s.appendChild(p);
-  return s;
-};
 
 export class PreviewPanel {
   private bridge: Bridge | null = null;
@@ -65,7 +50,7 @@ export class PreviewPanel {
     const reloadBtn = document.createElement("button");
     reloadBtn.className = "preview-btn";
     reloadBtn.title = "Reload";
-    reloadBtn.append(svg("M19 11 A7.5 7.5 0 1 0 19.6 14.6 M14.6 8.4 L19.4 8.4 L19.4 13"));
+    reloadBtn.append(icon(I.reload, 16));
     reloadBtn.addEventListener("click", () => this.reload());
 
     const select = document.createElement("select");
@@ -91,7 +76,7 @@ export class PreviewPanel {
     const openBtn = document.createElement("button");
     openBtn.className = "preview-btn";
     openBtn.title = "Open in a new tab";
-    openBtn.append(svg("M14 5 H19 V10 M19 5 L11 13 M18 13 V19 H5 V6 H11"));
+    openBtn.append(icon(I.openExternal, 16));
     openBtn.addEventListener("click", () => {
       if (this.bridge) window.open(this.bridge.previewUrl(this.port), "_blank", "noopener");
     });

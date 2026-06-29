@@ -189,6 +189,7 @@ kbd {
 }
 .activity-btn:hover { background: var(--hover); color: var(--fg); }
 .activity-btn.active { color: var(--fg); }
+.activity-btn svg { width: 20px; height: 20px; }
 .activity-btn.active::before {
   content: "";
   position: absolute;
@@ -723,7 +724,8 @@ kbd {
   text-align: left;
 }
 .settings-row:hover { background: var(--row-hover); }
-.settings-row svg { flex: none; }
+.settings-row svg { flex: none; color: var(--icon); }
+.settings-row svg.accent { color: var(--primary); }
 .settings-row kbd { margin-left: auto; }
 .settings-div { height: 1px; background: var(--popover-border); margin: 6px 8px; }
 .settings-note {

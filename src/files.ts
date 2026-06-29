@@ -4,42 +4,13 @@
 
 import type { NanoVM, DirEntry } from "@container/nanovm.mjs";
 import { LocalMounts, isFileSystemAccessSupported } from "./localfs";
+import { I, icon, type IconNode } from "./icons";
 
 export interface FilesPanelOptions {
   /** Called when a file row is activated (wired to the Editor tab in P3). */
   onOpenFile?: (path: string) => void;
   /** Local FS mapping (File System Access API); enables the mount buttons. */
   localMounts?: LocalMounts;
-}
-
-// Small inline SVGs in the chrome's stroke style (13px, currentColor).
-const ICON = {
-  chevron: "M9 6 L15 12 L9 18",
-  file: "M7 3.5 H14 L18 7.5 V20.5 H7 Z M14 3.5 V7.5 H18",
-  folder: "M3.5 6.5 H10 L12 9 H20.5 V18.5 H3.5 Z",
-  newFile: "M7 3.5 H13 L18 8.5 V20.5 H7 Z M13 3.5 V8.5 H18 M12.5 12 V17 M10 14.5 H15",
-  newFolder: "M3.5 6.5 H9 L11 9 H20.5 V18.5 H3.5 Z M12 12.5 V16.5 M10 14.5 H14",
-  refresh: "M19 11 A7.5 7.5 0 1 0 19.6 14.6 M14.6 8.4 L19.4 8.4 L19.4 13",
-  rename: "M5 19 H19 M14 5.5 L18.5 10 L9 19.5 L4.5 19.5 L4.5 15 Z",
-  trash: "M5 6.5 L19 6.5 M9.5 6.5 L9.5 4.5 L14.5 4.5 L14.5 6.5 M7 6.5 L7.7 19.5 L16.3 19.5 L17 6.5",
-  mountDir: "M3.5 6.5 H9 L11 9 H20.5 V18.5 H3.5 Z M12 17 V11 M9.5 13.5 L12 11 L14.5 13.5",
-  openLocal: "M7 3.5 H14 L18 7.5 V20.5 H7 Z M14 3.5 V7.5 H18 M12.5 17 V11 M10 13.5 L12.5 11 L15 13.5",
-};
-
-function svg(path: string, size = 13, strokeWidth = 1.7): SVGSVGElement {
-  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  s.setAttribute("width", String(size));
-  s.setAttribute("height", String(size));
-  s.setAttribute("viewBox", "0 0 24 24");
-  s.setAttribute("fill", "none");
-  s.setAttribute("stroke", "currentColor");
-  s.setAttribute("stroke-width", String(strokeWidth));
-  s.setAttribute("stroke-linecap", "round");
-  s.setAttribute("stroke-linejoin", "round");
-  const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  p.setAttribute("d", path);
-  s.appendChild(p);
-  return s;
 }
 
 const joinPath = (dir: string, name: string): string =>
@@ -82,17 +53,17 @@ export class FilesPanel {
     const toolbar = document.createElement("div");
     toolbar.className = "files-toolbar";
     toolbar.append(
-      this.toolBtn("New file", ICON.newFile, () => this.beginCreate("file")),
-      this.toolBtn("New folder", ICON.newFolder, () => this.beginCreate("dir")),
-      this.toolBtn("Refresh", ICON.refresh, () => this.refresh()),
+      this.toolBtn("New file", I.newFile, () => this.beginCreate("file")),
+      this.toolBtn("New folder", I.newFolder, () => this.beginCreate("dir")),
+      this.toolBtn("Refresh", I.refresh, () => this.refresh()),
     );
     if (this.opts.localMounts && isFileSystemAccessSupported()) {
       const spacer = document.createElement("span");
       spacer.className = "files-tool-gap";
       toolbar.append(
         spacer,
-        this.toolBtn("Map local file…", ICON.openLocal, () => this.mapLocal("file")),
-        this.toolBtn("Map local folder…", ICON.mountDir, () => this.mapLocal("dir")),
+        this.toolBtn("Map local file…", I.mapFile, () => this.mapLocal("file")),
+        this.toolBtn("Map local folder…", I.mapFolder, () => this.mapLocal("dir")),
       );
     }
 
@@ -154,7 +125,7 @@ export class FilesPanel {
 
     const isDir = entry.type === "dir";
     if (isDir) {
-      const tw = svg(ICON.chevron, 16);
+      const tw = icon(I.chevron, 16);
       tw.classList.add("file-twist");
       if (this.expanded.has(path)) tw.classList.add("open");
       row.append(tw);
@@ -164,7 +135,7 @@ export class FilesPanel {
       row.append(spacer);
     }
 
-    row.append(svg(isDir ? ICON.folder : ICON.file, 16));
+    row.append(icon(isDir ? I.folder : I.file, 16));
 
     const name = document.createElement("span");
     name.className = "file-name";
@@ -174,11 +145,11 @@ export class FilesPanel {
     const actions = document.createElement("span");
     actions.className = "file-actions";
     actions.append(
-      this.rowBtn("Rename", ICON.rename, (ev) => {
+      this.rowBtn("Rename", I.rename, (ev) => {
         ev.stopPropagation();
         this.beginRename(row, entry, path);
       }),
-      this.rowBtn("Delete", ICON.trash, (ev) => {
+      this.rowBtn("Delete", I.trash, (ev) => {
         ev.stopPropagation();
         this.confirmDelete(row, path);
       }),
@@ -351,26 +322,26 @@ export class FilesPanel {
     return wrap;
   }
 
-  private toolBtn(title: string, path: string, onClick: () => void): HTMLButtonElement {
+  private toolBtn(title: string, node: IconNode, onClick: () => void): HTMLButtonElement {
     const b = document.createElement("button");
     b.className = "files-tool";
     b.title = title;
     b.setAttribute("aria-label", title);
-    b.append(svg(path, 18, 2));
+    b.append(icon(node, 18));
     b.addEventListener("click", onClick);
     return b;
   }
 
   private rowBtn(
     title: string,
-    path: string,
+    node: IconNode,
     onClick: (ev: MouseEvent) => void,
   ): HTMLButtonElement {
     const b = document.createElement("button");
     b.className = "file-act";
     b.title = title;
     b.setAttribute("aria-label", title);
-    b.append(svg(path, 16));
+    b.append(icon(node, 16));
     b.addEventListener("click", onClick);
     return b;
   }
