@@ -149,12 +149,12 @@ export class FilesPanel {
       row.classList.add("mapped");
       row.title = "mapped to a local file (edits write back to disk)";
     }
-    row.style.paddingLeft = `${8 + depth * 13}px`;
+    row.style.paddingLeft = `${6 + depth * 12}px`;
     row.dataset.path = path;
 
     const isDir = entry.type === "dir";
     if (isDir) {
-      const tw = svg(ICON.chevron, 13);
+      const tw = svg(ICON.chevron, 16);
       tw.classList.add("file-twist");
       if (this.expanded.has(path)) tw.classList.add("open");
       row.append(tw);
@@ -370,7 +370,7 @@ export class FilesPanel {
     b.className = "file-act";
     b.title = title;
     b.setAttribute("aria-label", title);
-    b.append(svg(path, 14));
+    b.append(svg(path, 16));
     b.addEventListener("click", onClick);
     return b;
   }

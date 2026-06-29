@@ -23,7 +23,6 @@ export class Chrome {
   private app = el("app");
   private statGrid = el("stat-grid");
   private statCursor = el("stat-cursor");
-  private statRenderer = el("stat-renderer");
   private statStatus = el("stat-status");
   private statUptime = el("stat-uptime");
   private statIps = el("stat-ips");
@@ -61,9 +60,6 @@ export class Chrome {
   }
   setCursor(row: number, col: number) {
     this.statCursor.textContent = `ln ${row + 1}:${col + 1}`;
-  }
-  setRenderer(name: string) {
-    this.statRenderer.textContent = name;
   }
   setStatus(text: string) {
     this.statStatus.textContent = text;

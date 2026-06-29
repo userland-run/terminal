@@ -20,7 +20,7 @@
         </button>
         <div class="brand">userland<span class="dot">.run</span></div>
         <div class="spacer"></div>
-        <div class="badge">NanoVM&nbsp;·&nbsp;node v25</div>
+        <div class="badge">NanoVM</div>
         <div class="actions">
           <button class="icon-btn" id="act-clear" title="Clear screen" aria-label="Clear screen">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6.5 L19 6.5"></path><path d="M9.5 6.5 L9.5 4.5 L14.5 4.5 L14.5 6.5"></path><path d="M7 6.5 L7.7 19.5 L16.3 19.5 L17 6.5"></path><path d="M10 10 L10 16 M14 10 L14 16"></path></svg>
@@ -73,7 +73,7 @@
             <div class="panel-body">
               <ul id="sessions" class="list">
                 <li class="session-row active">
-                  <svg class="session-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"></rect><path d="M7.5 10 L10.2 12.5 L7.5 15"></path><path d="M12.5 15 L16.5 15"></path></svg>
+                  <svg class="session-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"></rect><path d="M7.5 10 L10.2 12.5 L7.5 15"></path><path d="M12.5 15 L16.5 15"></path></svg>
                   <div class="session-meta">
                     <div class="session-name">sh</div>
                     <div class="session-cwd" id="session-state">booting…</div>
@@ -88,16 +88,16 @@
       <main id="terminal-area">
         <div class="tabstrip" id="tabstrip" role="tablist">
           <button class="tab active" data-tab="terminal" role="tab" aria-selected="true">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"></rect><path d="M7.5 10 L10.2 12.5 L7.5 15"></path><path d="M12.5 15 L16.5 15"></path></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"></rect><path d="M7.5 10 L10.2 12.5 L7.5 15"></path><path d="M12.5 15 L16.5 15"></path></svg>
             <span>Terminal</span>
           </button>
           <button class="tab" data-tab="editor" role="tab" aria-selected="false" hidden>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7 L5 12 L9 17 M15 7 L19 12 L15 17"></path></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7 L5 12 L9 17 M15 7 L19 12 L15 17"></path></svg>
             <span class="tab-label">Editor</span>
             <span class="tab-close" data-close="editor" title="Close" aria-label="Close editor">×</span>
           </button>
           <button class="tab" data-tab="preview" role="tab" aria-selected="false" hidden>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"></circle><path d="M3.5 12 H20.5 M12 3.5 C14.5 6 14.5 18 12 20.5 C9.5 18 9.5 6 12 3.5"></path></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"></circle><path d="M3.5 12 H20.5 M12 3.5 C14.5 6 14.5 18 12 20.5 C9.5 18 9.5 6 12 3.5"></path></svg>
             <span>Preview</span>
           </button>
         </div>
@@ -121,8 +121,6 @@
         <span class="sep port-sep" id="stat-port-sep" hidden>·</span>
         <span class="stat port" id="stat-port" title="a server is listening" hidden></span>
         <div class="spacer"></div>
-        <span class="stat" id="stat-renderer">—</span>
-        <span class="sep">·</span>
         <span class="stat">RV64GC</span>
         <span class="sep">·</span>
         <span class="stat" id="stat-cursor">ln 1:1</span>
@@ -132,15 +130,15 @@
       <div id="settings-popover" hidden role="menu" aria-label="Settings">
         <div class="settings-label">Session</div>
         <button class="settings-row" id="set-clear">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--icon)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6.5 L19 6.5 M9.5 6.5 L9.5 4.5 L14.5 4.5 L14.5 6.5 M7 6.5 L7.7 19.5 L16.3 19.5 L17 6.5"></path></svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--icon)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6.5 L19 6.5 M9.5 6.5 L9.5 4.5 L14.5 4.5 L14.5 6.5 M7 6.5 L7.7 19.5 L16.3 19.5 L17 6.5"></path></svg>
           Clear scrollback
         </button>
         <button class="settings-row" id="set-restart">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--icon)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19 11 A7.5 7.5 0 1 0 19.6 14.6 M14.6 8.4 L19.4 8.4 L19.4 13"></path></svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--icon)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19 11 A7.5 7.5 0 1 0 19.6 14.6 M14.6 8.4 L19.4 8.4 L19.4 13"></path></svg>
           Restart VM
         </button>
         <button class="settings-row" id="set-palette">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M7.5 9.5 L10.5 12.5 L7.5 15.5"></path><path d="M12.5 15.5 L16.5 15.5"></path></svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M7.5 9.5 L10.5 12.5 L7.5 15.5"></path><path d="M12.5 15.5 L16.5 15.5"></path></svg>
           Command palette<kbd>⌘K</kbd>
         </button>
         <div class="settings-div"></div>

@@ -27,8 +27,8 @@ export interface PreviewPanelOptions {
 
 const svg = (path: string): SVGSVGElement => {
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  s.setAttribute("width", "14");
-  s.setAttribute("height", "14");
+  s.setAttribute("width", "16");
+  s.setAttribute("height", "16");
   s.setAttribute("viewBox", "0 0 24 24");
   s.setAttribute("fill", "none");
   s.setAttribute("stroke", "currentColor");

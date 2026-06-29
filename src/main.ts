@@ -75,11 +75,9 @@ export async function createTerminal(
   let renderer: TermRenderer;
   try {
     renderer = await GpuRenderer.create(canvas, cfg.fontPx);
-    chrome.setRenderer("WebGPU");
   } catch (e) {
     console.warn("[console] WebGPU unavailable — falling back to 2D canvas:", e);
     renderer = new CanvasRenderer(canvas, cfg.fontPx);
-    chrome.setRenderer("Canvas2D");
   }
 
   let fontPx = cfg.fontPx;
