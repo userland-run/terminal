@@ -398,18 +398,18 @@ kbd {
 .files-body { padding: 2px 0 var(--space-2); }
 .files-toolbar {
   display: flex;
-  gap: 2px;
-  padding: 0 4px 4px;
+  gap: 3px;
+  padding: 0 4px 5px;
 }
 .files-tool {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 22px;
+  width: 28px;
+  height: 26px;
   border: none;
   background: none;
-  color: var(--icon, var(--label));
+  color: var(--muted-fg);
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: background 0.1s, color 0.1s;

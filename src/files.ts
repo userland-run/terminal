@@ -26,14 +26,14 @@ const ICON = {
   openLocal: "M7 3.5 H14 L18 7.5 V20.5 H7 Z M14 3.5 V7.5 H18 M12.5 17 V11 M10 13.5 L12.5 11 L15 13.5",
 };
 
-function svg(path: string, size = 13): SVGSVGElement {
+function svg(path: string, size = 13, strokeWidth = 1.7): SVGSVGElement {
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   s.setAttribute("width", String(size));
   s.setAttribute("height", String(size));
   s.setAttribute("viewBox", "0 0 24 24");
   s.setAttribute("fill", "none");
   s.setAttribute("stroke", "currentColor");
-  s.setAttribute("stroke-width", "1.7");
+  s.setAttribute("stroke-width", String(strokeWidth));
   s.setAttribute("stroke-linecap", "round");
   s.setAttribute("stroke-linejoin", "round");
   const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -356,7 +356,7 @@ export class FilesPanel {
     b.className = "files-tool";
     b.title = title;
     b.setAttribute("aria-label", title);
-    b.append(svg(path, 16));
+    b.append(svg(path, 18, 2));
     b.addEventListener("click", onClick);
     return b;
   }
