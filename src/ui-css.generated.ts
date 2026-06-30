@@ -56,7 +56,21 @@ const css: string = `/* SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-UEL
 
 /* The web-component host fills the box the consumer sizes (height set by the
    embedding page / standalone shell); #app then fills the host. */
-:host { display: block; height: 100%; }
+:host {
+  display: block;
+  height: 100%;
+  /* Reset inherited text properties. Shadow DOM encapsulates *selectors*, but
+     INHERITED properties still cross the boundary from the host's context — so
+     an embedding page that sets e.g. text-align:center on a centered hero would
+     otherwise center the terminal's file-tree labels and other left-aligned UI.
+     Establish a neutral baseline here; the terminal's own rules override it. */
+  text-align: left;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-transform: none;
+  text-indent: 0;
+  font-style: normal;
+}
 
 /* Reset + base ink/type scoped to the terminal subtree (the host page keeps its
    own box-sizing, background and fonts — nothing here applies outside #app). */
