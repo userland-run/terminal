@@ -502,13 +502,33 @@ export async function createTerminal(
     e.preventDefault();
   });
 
-  // Boot the interactive session. The run loop yields to the event loop (and
-  // parks on empty stdin), so rendering and keystrokes keep flowing.
-  vm.run(cfg.shellCommand, { maxSteps: 5_000_000_000 }).then((r) => {
-    vm.termEcho(`\r\n[shell exited: ${r.exitCode}]\r\n`);
-    chrome.setSession(`exited ${r.exitCode}`);
-    chrome.setStatus("done");
-  });
+  // Boot the interactive session and keep it alive. The run loop yields to the
+  // event loop (and parks on empty stdin), so rendering and keystrokes keep
+  // flowing. Crucially, when the shell exits we relaunch it: an interactive `sh`
+  // boots with "job control turned off" (no controlling tty), so Ctrl-C at the
+  // prompt delivers a fatal SIGINT that *exits the shell* rather than just
+  // interrupting the foreground command — without a restart the pane would be
+  // dead and every later keystroke would do nothing.
+  void (async () => {
+    let booted = false;
+    for (;;) {
+      let r;
+      try {
+        r = await vm.run(cfg.shellCommand, { maxSteps: 5_000_000_000 });
+      } catch {
+        return; // VM destroyed (element removed / disposed) — stop relaunching.
+      }
+      // Always relaunch: an interactive `sh` boots with "job control turned off"
+      // (no controlling tty), so Ctrl-C delivers a fatal SIGINT that EXITS the
+      // shell rather than just interrupting the foreground command. Without a
+      // relaunch the pane would be dead and every later keystroke a no-op.
+      if (booted) vm.termEcho(`\r\n[session ended (exit ${r.exitCode}) — new shell]\r\n`);
+      booted = true;
+      chrome.setStatus("live");
+      chrome.setSession("ready");
+      await new Promise((res) => setTimeout(res, 80)); // guard against a hot crash-loop
+    }
+  })();
 
   // Standalone (full-page) autofocus so typing works immediately; an embedded
   // terminal waits for a click so it never grabs the host page's focus on load.
