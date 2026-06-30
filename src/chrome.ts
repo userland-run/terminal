@@ -7,10 +7,12 @@
 // semantic calls. Layout + tokens follow style-guide/terminal/Userland
 // Terminal.dc.html.
 
+import { byId, qs, qsa, domRoot } from "./dom";
+
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
-  const node = document.getElementById(id);
+  const node = byId<T>(id);
   if (!node) throw new Error(`missing #${id}`);
-  return node as T;
+  return node;
 }
 
 export interface ChromeActions {
@@ -38,20 +40,22 @@ export class Chrome {
 
   constructor() {
     // VS Code-style activity bar: each icon switches the single active view.
-    for (const btn of document.querySelectorAll<HTMLElement>(".activity-btn")) {
+    for (const btn of qsa<HTMLElement>(".activity-btn")) {
       btn.addEventListener("click", () => {
         const v = btn.dataset.view;
         if (v) this.showView(v);
       });
     }
-    // Dismiss the settings popover on outside click / Escape.
-    document.addEventListener("mousedown", (e) => {
+    // Dismiss the settings popover on outside click / Escape. Listen on the
+    // scoped root: under shadow DOM, document-level events are retargeted to the
+    // host, so `e.target` would never be the real (in-shadow) popover/button.
+    domRoot().addEventListener("mousedown", (e) => {
       if (this.settings.hidden) return;
-      const t = e.target as Node;
+      const t = (e as MouseEvent).target as Node;
       if (!this.settings.contains(t) && !el("act-settings").contains(t)) this.hideSettings();
     });
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && !this.settings.hidden) this.hideSettings();
+    domRoot().addEventListener("keydown", (e) => {
+      if ((e as KeyboardEvent).key === "Escape" && !this.settings.hidden) this.hideSettings();
     });
   }
 
@@ -94,10 +98,10 @@ export class Chrome {
   showView(view: string) {
     if (!this.enabledViews.has(view)) return;
     this.activeView = view;
-    for (const p of document.querySelectorAll<HTMLElement>(".sidebar-views .panel")) {
+    for (const p of qsa<HTMLElement>(".sidebar-views .panel")) {
       p.classList.toggle("active", p.dataset.view === view);
     }
-    for (const b of document.querySelectorAll<HTMLElement>(".activity-btn")) {
+    for (const b of qsa<HTMLElement>(".activity-btn")) {
       const on = b.dataset.view === view;
       b.classList.toggle("active", on);
       b.setAttribute("aria-pressed", String(on));
@@ -108,7 +112,7 @@ export class Chrome {
   setViewEnabled(view: string, enabled: boolean) {
     if (enabled) this.enabledViews.add(view);
     else this.enabledViews.delete(view);
-    const btn = document.querySelector<HTMLElement>(`.activity-btn[data-view="${view}"]`);
+    const btn = qs<HTMLElement>(`.activity-btn[data-view="${view}"]`);
     if (btn) btn.style.display = enabled ? "" : "none";
     if (!enabled && this.activeView === view) this.activeView = null;
   }

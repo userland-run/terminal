@@ -6,9 +6,10 @@
   "description": "Console — the terminal front-end for userland.run / NanoVM",
   "scripts": {
     "sync-sw": "cp ../sdk/static/nano-sw.js public/nano-sw.js",
-    "predev": "npm run sync-sw",
+    "gen:css": "node scripts/gen-ui-css.mjs",
+    "predev": "npm run sync-sw && npm run gen:css",
     "dev": "vite",
-    "prebuild": "npm run sync-sw",
+    "prebuild": "npm run sync-sw && npm run gen:css",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test:e2e": "playwright test"

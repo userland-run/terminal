@@ -8,7 +8,6 @@
 
 import {
   createElement,
-  createIcons,
   type IconNode,
   ChevronRight,
   File,
@@ -30,6 +29,8 @@ import {
   Code,
   Command,
 } from "lucide";
+
+import { qsa } from "./dom";
 
 export type { IconNode };
 
@@ -61,21 +62,33 @@ export function icon(node: IconNode, size = 16, strokeWidth: string | number = S
   return el;
 }
 
-/** Replace the static `<i data-lucide="…">` placeholders in the chrome. */
+// data-lucide placeholder name → icon node. (kebab-case, as written in the scaffold.)
+const CHROME_ICONS: Record<string, IconNode> = {
+  "panel-left": PanelLeft,
+  "trash-2": Trash2,
+  "rotate-cw": RotateCw,
+  ellipsis: Ellipsis,
+  folder: Folder,
+  "layout-grid": LayoutGrid,
+  "square-terminal": SquareTerminal,
+  code: Code,
+  globe: Globe,
+  command: Command,
+};
+
+/**
+ * Replace the static `<i data-lucide="…">` placeholders in the chrome with
+ * inline Lucide SVGs. Scoped to the terminal's root (not the global document, so
+ * it works inside a shadow root) — replaces lucide's own `createIcons`, which
+ * only scans `document`.
+ */
 export function renderChromeIcons(): void {
-  createIcons({
-    icons: {
-      PanelLeft,
-      Trash2,
-      RotateCw,
-      Ellipsis,
-      Folder,
-      LayoutGrid,
-      SquareTerminal,
-      Code,
-      Globe,
-      Command,
-    },
-    attrs: { width: "16", height: "16", "stroke-width": STROKE },
-  });
+  for (const ph of qsa<HTMLElement>("[data-lucide]")) {
+    const name = ph.getAttribute("data-lucide");
+    const node = name ? CHROME_ICONS[name] : undefined;
+    if (!node) continue;
+    const svg = icon(node, 16);
+    if (ph.className) svg.setAttribute("class", ph.className); // keep .session-ico, .accent, …
+    ph.replaceWith(svg);
+  }
 }

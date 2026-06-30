@@ -1,9 +1,12 @@
-/* SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-UEL
+// AUTO-GENERATED from src/ui.css by scripts/gen-ui-css.mjs — do not edit by hand.
+// SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-UEL
+/* eslint-disable */
+const css: string = `/* SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-UEL
    Copyright (C) 2026 And The Next GmbH - https://userland.run
    Part of the userland.run terminal; dual-licensed - see LICENSE.md. */
 
 /* Design tokens. Source of truth: style-guide/terminal/Userland Terminal.dc.html
-   (the hi-fidelity terminal comp), grounded in the Paged `.dark` system. The
+   (the hi-fidelity terminal comp), grounded in the Paged \`.dark\` system. The
    comp uses a four-tone surface ramp — desk → card → sidebar → chrome — rather
    than a single panel grey. Console CSS references these via var(--token). */
 /* Scoped to the host + #app (not :root) so the variables can't leak onto, or be
@@ -807,3 +810,5 @@ kbd {
 #palette-list li .pl-hint { margin-left: auto; color: var(--muted-fg); font-family: var(--font-mono); font-size: 11px; }
 #palette-list li.sel { background: var(--primary); color: var(--ground); }
 #palette-list li.sel .pl-hint { color: var(--ground); }
+`;
+export default css;

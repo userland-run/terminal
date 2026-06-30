@@ -11,10 +11,12 @@ export interface Command {
   run: () => void;
 }
 
+import { byId } from "./dom";
+
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
-  const node = document.getElementById(id);
+  const node = byId<T>(id);
   if (!node) throw new Error(`missing #${id}`);
-  return node as T;
+  return node;
 }
 
 export class CommandBar {

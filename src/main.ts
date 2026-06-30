@@ -2,9 +2,15 @@
 // Copyright (C) 2026 And The Next GmbH - https://userland.run
 // Part of the userland.run terminal; dual-licensed - see LICENSE.md.
 
-import "./ui.css";
+// The stylesheet as a string (generated from ui.css). createTerminal injects it
+// into its shadow root, so the CSS travels with the bundle identically in both
+// the standalone Vite build and the SDK's tsup bundle.
+import uiCss from "./ui-css.generated";
 import type { TermSnapshot } from "@container/nanovm.mjs";
 import { NanoVM } from "@container/nanovm.mjs";
+import { injectScaffold } from "./scaffold";
+import { ensureStyles } from "./styles";
+import { setDomRoot, byId, overlayHost, activeEl } from "./dom";
 import { CanvasRenderer, type TermRenderer } from "./renderer";
 import { GpuRenderer } from "./gpu/renderer";
 import { Chrome } from "./chrome";
@@ -51,21 +57,35 @@ export interface TerminalHandle {
  * returning a {@link TerminalHandle} for programmatic control.
  */
 export async function createTerminal(
-  target: string | HTMLElement = "#app",
+  target: string | HTMLElement | ShadowRoot = "#app",
   userConfig: TerminalConfig = {},
 ): Promise<TerminalHandle> {
   const cfg = normalizeConfig(userConfig);
-  const root = typeof target === "string" ? document.querySelector(target) : target;
-  if (!root) throw new Error(`createTerminal: target not found: ${String(target)}`);
+  const mount: HTMLElement | ShadowRoot | null =
+    typeof target === "string" ? document.querySelector<HTMLElement>(target) : target;
+  if (!mount) throw new Error(`createTerminal: target not found: ${String(target)}`);
+
+  // Self-contained mount: scope every DOM lookup to `mount` (a shadow root when
+  // embedded as <nano-terminal>, else the global document), inject the scoped
+  // stylesheet, and build the scaffold inside it. All three no-op when a
+  // standalone shell already provided them, so the standalone app is unchanged.
+  const scoped: Document | ShadowRoot = mount instanceof ShadowRoot ? mount : document;
+  setDomRoot(scoped);
+  ensureStyles(uiCss, mount instanceof ShadowRoot ? mount : document.head);
+  injectScaffold(mount);
 
   renderChromeIcons(); // swap the static [data-lucide] placeholders for Lucide SVGs
   installTooltips(); // styled tooltips for every titled control
   const chrome = new Chrome();
   // The terminal lives in one tab of the main pane; its tab-pane (#term-pane),
   // not #terminal-area, is what sizes the grid (the tab strip takes height too).
-  const area = document.getElementById("term-pane") as HTMLElement;
-  const canvas = document.getElementById("screen") as HTMLCanvasElement;
-  const a11y = new A11yMirror(document.body);
+  const area = byId("term-pane") as HTMLElement;
+  const canvas = byId("screen") as HTMLCanvasElement;
+  const a11y = new A11yMirror(overlayHost());
+  // Make the terminal focusable so keyboard input is scoped to it — an embedded
+  // <nano-terminal> must not capture the host page's keystrokes when unfocused.
+  const appEl = byId("app") as HTMLElement;
+  appEl.tabIndex = -1;
 
   // Cell metrics depend on the real font; wait for it before measuring.
   try {
@@ -114,9 +134,9 @@ export async function createTerminal(
     // Catalog sidebar: a searchable, installable app list. Renders when the signed
     // index loads (non-blocking); each row installs into the running guest.
     void catalog.mountSidebar({
-      list: document.getElementById("catalog")!,
-      hint: document.getElementById("catalog-hint")!,
-      filter: document.getElementById("catalog-filter") as HTMLInputElement,
+      list: byId("catalog")!,
+      hint: byId("catalog-hint")!,
+      filter: byId("catalog-filter") as HTMLInputElement,
     });
   } else {
     chrome.setViewEnabled("catalog", false);
@@ -133,7 +153,7 @@ export async function createTerminal(
       onOpenFile: (path) => openInEditor(path),
       localMounts: localMounts ?? undefined,
     });
-    files.mount(document.getElementById("files")!);
+    files.mount(byId("files")!);
   } else {
     chrome.setViewEnabled("files", false);
   }
@@ -231,7 +251,7 @@ export async function createTerminal(
   const tabs = new Tabs({
     onSwitch: (t) => {
       if (t === "terminal") {
-        (document.activeElement as HTMLElement | null)?.blur();
+        (activeEl() as HTMLElement | null)?.blur();
         requestAnimationFrame(() => refit(true));
       } else if (t === "preview") {
         preview?.ensureLoaded();
@@ -250,7 +270,7 @@ export async function createTerminal(
   if (cfg.features.preview.enabled) {
     const { PreviewPanel } = await import("./preview");
     preview = new PreviewPanel({
-      host: document.getElementById("preview-host")!,
+      host: byId("preview-host")!,
       vm,
       serviceWorkerUrl: cfg.serviceWorkerUrl,
       ports: cfg.features.preview.ports,
@@ -270,7 +290,7 @@ export async function createTerminal(
       if (!editor) {
         const { EditorTab } = await import("./editor");
         editor = new EditorTab({
-          host: document.getElementById("editor-host")!,
+          host: byId("editor-host")!,
           vm,
           localMounts: localMounts ?? undefined,
           reveal: (label) => {
@@ -352,6 +372,7 @@ export async function createTerminal(
   };
   canvas.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
+    appEl.focus(); // clicking the grid focuses the terminal so it receives keys
     selecting = true;
     const at = pixelToCell(e, canvas, renderer.cellW, renderer.cellH, cols, rows);
     setSel({ anchor: at, head: at });
@@ -421,13 +442,15 @@ export async function createTerminal(
   });
 
   // — input —
-  window.addEventListener("keydown", (e) => {
+  // Listen on the focusable #app, not window: an embedded terminal must only
+  // capture keystrokes while it (or a child) holds focus.
+  appEl.addEventListener("keydown", (e) => {
     // While the palette is open it owns the keyboard (its input handles nav).
     if (palette?.open) return;
 
     // Don't steal keystrokes while a chrome input (e.g. the catalog search) is
     // focused — let the field handle them instead of forwarding to the guest tty.
-    const ae = document.activeElement as HTMLElement | null;
+    const ae = activeEl() as HTMLElement | null;
     if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return;
 
     // UI shortcuts (⌘ on mac). ⌘ keystrokes are never forwarded to the guest.
@@ -486,6 +509,10 @@ export async function createTerminal(
     chrome.setSession(`exited ${r.exitCode}`);
     chrome.setStatus("done");
   });
+
+  // Standalone (full-page) autofocus so typing works immediately; an embedded
+  // terminal waits for a click so it never grabs the host page's focus on load.
+  if (!(scoped instanceof ShadowRoot)) appEl.focus();
 
   return {
     vm,
