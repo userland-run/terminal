@@ -11,7 +11,7 @@
 import { createTerminal, type TerminalHandle } from "./main";
 import type { TerminalConfig, TerminalFeatureConfig } from "./config";
 
-const FEATURE_KEYS = ["catalog", "palette", "files", "editor", "preview"] as const;
+const FEATURE_KEYS = ["catalog", "palette", "files", "editor", "preview", "assistant"] as const;
 
 export class NanoTerminalElement extends HTMLElement {
   private booted = false;

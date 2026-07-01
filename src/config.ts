@@ -7,6 +7,8 @@
 // bundle, which `tsc` can't resolve — see src/catalog.ts). SDK embedders import
 // the type from @sdk; this local copy keeps the terminal's own build typed.
 
+import type { CloudModelConfig } from "./assistant/types";
+
 export interface TerminalPreviewConfig {
   /** Ports offered in the preview port selector. Default [8080]. */
   ports?: number[];
@@ -25,6 +27,17 @@ export interface TerminalFeatureConfig {
   editor?: boolean;
   /** Server-app preview (iframe over the in-VM HTTP server). Default on. */
   preview?: boolean | TerminalPreviewConfig;
+  /** AI assistant sidebar panel (Chrome Prompt API + optional cloud). Default on. */
+  assistant?: boolean;
+}
+
+export interface TerminalAssistantConfig {
+  /**
+   * Optional host-injected cloud model. When present, the assistant offers a
+   * "Cloud" model alongside on-device Nano and can generate real multi-file
+   * projects. Omit to run Nano-only (fully on-device, no secrets).
+   */
+  cloud?: CloudModelConfig;
 }
 
 export interface TerminalConfig {
@@ -40,6 +53,8 @@ export interface TerminalConfig {
   serviceWorkerUrl?: string;
   /** Feature toggles; omitted features use the defaults above. */
   features?: TerminalFeatureConfig;
+  /** Assistant wiring (e.g. an optional cloud model). */
+  assistant?: TerminalAssistantConfig;
 }
 
 /** Fully-resolved config: every field present, every feature an object. */
@@ -55,7 +70,9 @@ export interface ResolvedConfig {
     files: boolean;
     editor: boolean;
     preview: { enabled: boolean; ports: number[]; defaultPort: number };
+    assistant: boolean;
   };
+  assistant: TerminalAssistantConfig;
 }
 
 const DEFAULT_FONT_PX = 12; // matches the style-guide comp's terminal text scale
@@ -89,6 +106,8 @@ export function normalizeConfig(c: TerminalConfig = {}): ResolvedConfig {
         ports,
         defaultPort: previewObj.defaultPort ?? (ports[0] as number),
       },
+      assistant: f.assistant !== false,
     },
+    assistant: c.assistant ?? {},
   };
 }

@@ -28,6 +28,8 @@ import {
   LayoutGrid,
   Code,
   Command,
+  Sparkles,
+  Send,
 } from "lucide";
 
 import { qsa } from "./dom";
@@ -48,6 +50,8 @@ export const I = {
   mapFile: FileInput,
   reload: RotateCw,
   openExternal: ExternalLink,
+  sparkles: Sparkles,
+  send: Send,
 };
 
 // Lucide's default stroke (2) reads heavy at chrome sizes; 1.5 is lighter/crisper.
@@ -74,6 +78,7 @@ const CHROME_ICONS: Record<string, IconNode> = {
   code: Code,
   globe: Globe,
   command: Command,
+  sparkles: Sparkles,
 };
 
 /**

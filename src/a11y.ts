@@ -67,7 +67,7 @@ export class A11yMirror {
 }
 
 /** Decode a snapshot's cells into one trimmed string per row. */
-function rowsToText(snap: TermSnapshot): string[] {
+export function rowsToText(snap: TermSnapshot): string[] {
   const dv = new DataView(snap.cells.buffer, snap.cells.byteOffset, snap.cells.byteLength);
   const out: string[] = new Array(snap.rows);
   for (let r = 0; r < snap.rows; r++) {

@@ -821,3 +821,140 @@ kbd {
 #palette-list li .pl-hint { margin-left: auto; color: var(--muted-fg); font-family: var(--font-mono); font-size: 11px; }
 #palette-list li.sel { background: var(--primary); color: var(--ground); }
 #palette-list li.sel .pl-hint { color: var(--ground); }
+
+/* ── AI assistant panel ─────────────────────────────────────────────────────
+   A chat UI over the model-agnostic orchestrator: availability banner, message
+   log, codegen template chips, input row, and a model-picker footer. Fills the
+   sidebar panel body as a flex column with the log scrolling. */
+#panel-assistant .panel-body { padding: 0; overflow: hidden; display: flex; }
+#assistant-host { flex: 1; min-height: 0; display: flex; }
+.asst { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+.asst-banner {
+  font-size: 12px;
+  color: var(--muted-fg);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: rgba(169, 132, 245, 0.06);
+}
+.asst-dl {
+  margin-left: var(--space-1);
+  font: inherit;
+  color: var(--ground);
+  background: var(--primary);
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.asst-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.asst-note { color: var(--muted-fg); font-size: 12px; }
+.asst-msg {
+  max-width: 92%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.asst-msg.user { align-self: flex-end; background: var(--selected); color: var(--fg); }
+.asst-msg.bot { align-self: flex-start; background: var(--elevated); color: var(--fg); }
+.asst-status { color: var(--label); font-size: 11px; font-family: var(--font-mono); }
+.asst-error { color: #f0a0a0; font-size: 12px; }
+.asst-tool {
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.asst-out {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+}
+.asst-out.fail { border-color: #6a3a3a; }
+
+.asst-templates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3) 0;
+}
+/* `display: flex` above would otherwise defeat the `hidden` attribute. */
+.asst-templates[hidden] { display: none; }
+.asst-chip {
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg);
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.asst-chip:hover { background: var(--hover); }
+
+.asst-input {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-end;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.asst-text {
+  flex: 1;
+  resize: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+}
+.asst-text:focus { outline: none; border-color: var(--primary); }
+.asst-text:disabled { opacity: 0.5; }
+.asst-send {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: var(--ground);
+  background: var(--primary);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.asst-send:disabled { opacity: 0.4; cursor: default; }
+
+.asst-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  font-size: 11px;
+  color: var(--muted-fg);
+}
+.asst-models { display: flex; gap: var(--space-2); }
+.asst-model,
+.asst-codegen { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+.asst-usage { margin-left: auto; font-family: var(--font-mono); color: var(--stat-label); }

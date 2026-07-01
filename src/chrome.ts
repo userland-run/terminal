@@ -36,7 +36,7 @@ export class Chrome {
   private settings = el("settings-popover");
 
   private activeView: string | null = null;
-  private readonly enabledViews = new Set<string>(["files", "catalog", "sessions"]);
+  private readonly enabledViews = new Set<string>(["files", "catalog", "sessions", "assistant"]);
 
   constructor() {
     // VS Code-style activity bar: each icon switches the single active view.
@@ -117,9 +117,9 @@ export class Chrome {
     if (!enabled && this.activeView === view) this.activeView = null;
   }
 
-  /** Activate the first enabled view (Files first, then Catalog, then Sessions). */
+  /** Activate the first enabled view (Files first, then Catalog, Sessions, Assistant). */
   activateDefaultView() {
-    const first = ["files", "catalog", "sessions"].find((v) => this.enabledViews.has(v));
+    const first = ["files", "catalog", "sessions", "assistant"].find((v) => this.enabledViews.has(v));
     if (first) this.showView(first);
   }
 

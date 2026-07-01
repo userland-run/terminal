@@ -41,9 +41,49 @@ Each feature is opt-in via `TerminalConfig.features`:
 | `editor`   | CodeMirror 6 editor tabs (lazy-loaded, themed) |
 | `preview`  | Iframe preview of in-VM HTTP servers via the SDK serve bridge |
 | `catalog`  | Browse + install apps from the [app catalog](https://github.com/userland-run/catalog) |
+| `assistant`| AI sidebar that drives the terminal in natural language + a codegen playground (see below) |
 
 The bare terminal (no features) is a plain shell; enabling `files` + `editor` + `preview` turns it
 into a VS-Code-style IDE that can edit a project and preview a dev server running inside the VM.
+
+### AI assistant
+
+The `assistant` panel lets you steer the terminal conversationally ("list the files", "write a
+fibonacci script and run it") and, in **Codegen** mode, generate a small app that is written into the
+VFS, compiled with an in-VM toolchain, and run — the browser VM as an offline, sandboxed build+run
+target. It's built on a single **VM tool registry** (`write_file`, `run_shell`, `run_node`, `serve`,
+`build_and_run`, …) exposed to two front-ends:
+
+- **In-page** — Chrome's on-device [Prompt API](https://developer.chrome.com/docs/ai/prompt-api)
+  (Gemini Nano). Zero server, no API keys, fully offline. Nano is a small model — great at intent
+  routing and short snippets, not at authoring large apps.
+- **[WebMCP](https://developer.chrome.com/docs/ai/webmcp)** — the same tools are registered on
+  `document.modelContext`, so Chrome's built-in agent can drive the terminal too.
+
+**Pluggable cloud model (optional).** For real multi-file / compiled projects, inject a cloud model.
+It's keyless-by-default — supply a `generate` callback so API keys stay in your proxy:
+
+```ts
+await createTerminal(el, {
+  features: { assistant: true },
+  assistant: {
+    cloud: {
+      label: "Gemini",
+      generate: async ({ system, messages, responseSchema }) => {
+        const r = await fetch("/api/ai", { method: "POST", body: JSON.stringify({ system, messages, responseSchema }) });
+        return (await r.json()).text; // your proxy holds the key
+      },
+    },
+  },
+});
+```
+
+**Enabling on-device AI (Chrome).** The Prompt API and WebMCP are flag/origin-trial gated as of
+early 2026. For local dev, enable in `chrome://flags`: `#prompt-api-for-gemini-nano`,
+`#optimization-guide-on-device-model`, and (for WebMCP) `#enable-webmcp-testing`; confirm the model
+at `chrome://on-device-internals`. When built-in AI is unavailable the panel degrades gracefully —
+it shows how to enable it, and the terminal is otherwise fully functional. Disable the panel entirely
+with the `no-assistant` attribute or `features: { assistant: false }`.
 
 ## Use it (as a consumer)
 

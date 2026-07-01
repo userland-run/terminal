@@ -15,7 +15,7 @@ import { CanvasRenderer, type TermRenderer } from "./renderer";
 import { GpuRenderer } from "./gpu/renderer";
 import { Chrome } from "./chrome";
 import { CommandBar } from "./commandbar";
-import { TerminalCatalog } from "./catalog";
+import { TerminalCatalog, type InstallProgress } from "./catalog";
 import { A11yMirror } from "./a11y";
 import { FilesPanel } from "./files";
 import { LocalMounts } from "./localfs";
@@ -29,6 +29,13 @@ import {
   extractText,
   type Selection,
 } from "./selection";
+import { StdoutBus } from "./assistant/stdout-bus";
+import { createVmTools } from "./assistant/tools";
+import { createBuildTool } from "./assistant/build";
+import { createNanoAdapter } from "./assistant/nano";
+import { createCloudAdapter } from "./assistant/cloud";
+import { AssistantPanel } from "./assistant/panel";
+import { registerWebMcpTools } from "./assistant/webmcp";
 
 const MIN_FONT_PX = 9;
 const MAX_FONT_PX = 28;
@@ -38,10 +45,28 @@ const PAD = 12; // #terminal-area padding (var(--space-3)) — keep in sync with
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
+/** Options for {@link TerminalHandle.installApp}. */
+export interface InstallAppOptions {
+  /** Receives the installer's phase/chunk events (e.g. to drive a progress bar). */
+  onProgress?: (e: InstallProgress) => void;
+  /** Suppress the in-terminal install echo — keep the shell pane clean. */
+  quiet?: boolean;
+}
+
 /** Handle returned by {@link createTerminal} for programmatic control. */
 export interface TerminalHandle {
   /** The running NanoVM instance (read/write the VFS, run commands). */
   vm: NanoVM;
+  /**
+   * Install a catalog app ("name" or "name@version") into the running guest's
+   * VFS — the SDK's verified, OPFS-cached, persisted installer (the same path
+   * the catalog sidebar uses). `onProgress` receives phase/chunk events; `quiet`
+   * suppresses the in-terminal echo (for host-driven provisioning that reports
+   * progress elsewhere, keeping the shell clean). Resolves `true` on success;
+   * rejects if the catalog feature is disabled. Use it to provision a toolchain
+   * (e.g. node + tsc) on boot without leaving the SDK.
+   */
+  installApp: (ref: string, opts?: InstallAppOptions) => Promise<boolean>;
   /** Open a guest file in the Editor tab (no-op if the editor is disabled). */
   openFile: (path: string) => void;
   /** Reveal the Preview tab on a port (no-op if preview is disabled). */
@@ -502,6 +527,41 @@ export async function createTerminal(
     e.preventDefault();
   });
 
+  // Shared handle (also returned) so the assistant panel and its VM tools can
+  // drive the terminal exactly like an external caller would.
+  const handle: TerminalHandle = {
+    vm,
+    installApp: (ref, opts) =>
+      catalog
+        ? catalog.install(ref, opts?.onProgress, opts?.quiet)
+        : Promise.reject(new Error("installApp: the catalog feature is disabled")),
+    openFile: (path: string) => void openInEditor(path),
+    showPreview: (port?: number) => preview?.open(port),
+    refreshFiles: () => files?.refresh(),
+  };
+
+  // AI assistant: a tap on the shell's stdout (so the assistant reads the same
+  // bytes the grid renders) + a model-agnostic panel. Gated by config.features.
+  const stdoutBus = new StdoutBus();
+  if (cfg.features.assistant) {
+    const nano = createNanoAdapter();
+    const cloud = cfg.assistant.cloud ? createCloudAdapter(cfg.assistant.cloud) : undefined;
+    // One shared registry drives both the in-page router and WebMCP.
+    const tools = [...createVmTools(handle, stdoutBus), createBuildTool(handle, stdoutBus)];
+    const host = byId("assistant-host");
+    if (host) new AssistantPanel({ handle, bus: stdoutBus, tools, nano, cloud }).mount(host);
+    registerWebMcpTools(tools); // expose the same tools to Chrome's built-in agent
+    // Dev-only handle for debugging / e2e (stripped from production bundles).
+    if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV) {
+      (globalThis as Record<string, unknown>).__nanoAssistant = { handle, bus: stdoutBus, tools };
+    }
+    palette?.addCommands([
+      { id: "assistant", title: "Open assistant", hint: "AI", run: () => chrome.showView("assistant") },
+    ]);
+  } else {
+    chrome.setViewEnabled("assistant", false);
+  }
+
   // Boot the interactive session and keep it alive. The run loop yields to the
   // event loop (and parks on empty stdin), so rendering and keystrokes keep
   // flowing. Crucially, when the shell exits we relaunch it: an interactive `sh`
@@ -514,7 +574,7 @@ export async function createTerminal(
     for (;;) {
       let r;
       try {
-        r = await vm.run(cfg.shellCommand, { maxSteps: 5_000_000_000 });
+        r = await vm.run(cfg.shellCommand, { maxSteps: 5_000_000_000, onStdout: stdoutBus.push });
       } catch {
         return; // VM destroyed (element removed / disposed) — stop relaunching.
       }
@@ -534,10 +594,5 @@ export async function createTerminal(
   // terminal waits for a click so it never grabs the host page's focus on load.
   if (!(scoped instanceof ShadowRoot)) appEl.focus();
 
-  return {
-    vm,
-    openFile: (path: string) => void openInEditor(path),
-    showPreview: (port?: number) => preview?.open(port),
-    refreshFiles: () => files?.refresh(),
-  };
+  return handle;
 }

@@ -34,7 +34,7 @@ export interface PaletteCommand {
 
 // Mirror of the SDK's InstallProgress (the @sdk alias points at the built bundle,
 // whose types aren't on the TS path — so we keep a local shape).
-type InstallProgress = {
+export type InstallProgress = {
   phase: "index" | "manifest" | "chunk" | "write" | "done";
   file?: string;
   chunk?: string;
@@ -107,17 +107,23 @@ export class TerminalCatalog {
 
   /** Install one app ("name" or "name@version") into the guest + record it.
    *  `onProgress` receives the installer's phase/chunk events (so the sidebar
-   *  can drive a progress bar). Returns true on success. */
-  async install(ref: string, onProgress?: (e: InstallProgress) => void): Promise<boolean> {
-    this.echo(`\ninstalling ${ref} from the catalog…\n`);
+   *  can drive a progress bar). `quiet` suppresses the terminal echo — for
+   *  programmatic provisioning that reports progress elsewhere (e.g. a host UI),
+   *  keeping the shell pane clean. Returns true on success. */
+  async install(
+    ref: string,
+    onProgress?: (e: InstallProgress) => void,
+    quiet = false,
+  ): Promise<boolean> {
+    if (!quiet) this.echo(`\ninstalling ${ref} from the catalog…\n`);
     try {
       const m = await this.catalog.install(this.target(), ref, onProgress ? { onProgress } : undefined);
       const exact = `${m.name}@${m.version}`;
       saveRecord([...loadRecord(), exact]);
-      this.echo(`installed ${exact} → ${m.files.map((f: any) => f.path).join(", ")}\n`);
+      if (!quiet) this.echo(`installed ${exact} → ${m.files.map((f: any) => f.path).join(", ")}\n`);
       return true;
     } catch (e: any) {
-      this.echo(`install failed: ${e?.message ?? e}\n`);
+      if (!quiet) this.echo(`install failed: ${e?.message ?? e}\n`);
       return false;
     }
   }

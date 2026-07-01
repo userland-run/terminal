@@ -45,6 +45,9 @@ export const SCAFFOLD_HTML = `
       <button class="activity-btn" data-view="sessions" title="Sessions" aria-label="Sessions">
         <i data-lucide="square-terminal"></i>
       </button>
+      <button class="activity-btn" data-view="assistant" title="Assistant" aria-label="Assistant">
+        <i data-lucide="sparkles"></i>
+      </button>
     </nav>
     <div class="sidebar-views">
       <section class="panel" id="panel-files" data-view="files">
@@ -80,6 +83,15 @@ export const SCAFFOLD_HTML = `
               </div>
             </li>
           </ul>
+        </div>
+      </section>
+      <section class="panel" id="panel-assistant" data-view="assistant">
+        <div class="panel-head">
+          <span class="panel-label">Assistant</span>
+          <span class="panel-hint">on-device AI</span>
+        </div>
+        <div class="panel-body">
+          <div id="assistant-host" class="muted-note">Assistant loads when opened.</div>
         </div>
       </section>
     </div>
