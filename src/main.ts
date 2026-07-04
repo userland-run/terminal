@@ -34,6 +34,7 @@ import { createVmTools } from "./assistant/tools";
 import { createBuildTool } from "./assistant/build";
 import { createNanoAdapter } from "./assistant/nano";
 import { createCloudAdapter } from "./assistant/cloud";
+import { createLocalAdapter } from "./assistant/local";
 import { AssistantPanel } from "./assistant/panel";
 import { registerWebMcpTools } from "./assistant/webmcp";
 
@@ -546,10 +547,14 @@ export async function createTerminal(
   if (cfg.features.assistant) {
     const nano = createNanoAdapter();
     const cloud = cfg.assistant.cloud ? createCloudAdapter(cfg.assistant.cloud) : undefined;
+    const local =
+      cfg.assistant.local === false
+        ? undefined
+        : createLocalAdapter(cfg.assistant.local ?? {});
     // One shared registry drives both the in-page router and WebMCP.
     const tools = [...createVmTools(handle, stdoutBus), createBuildTool(handle, stdoutBus)];
     const host = byId("assistant-host");
-    if (host) new AssistantPanel({ handle, bus: stdoutBus, tools, nano, cloud }).mount(host);
+    if (host) new AssistantPanel({ handle, bus: stdoutBus, tools, nano, cloud, local }).mount(host);
     registerWebMcpTools(tools); // expose the same tools to Chrome's built-in agent
     // Dev-only handle for debugging / e2e (stripped from production bundles).
     if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV) {

@@ -15,3 +15,7 @@ public/nano.wasm
 
 # Synced from the SDK by the predev/prebuild sync-sw script — not checked in.
 public/nano-sw.js
+
+# dev-deployed nanoinfer engine + model symlink (built from ../nanoinfer)
+public/nanoinfer-engine/
+public/models

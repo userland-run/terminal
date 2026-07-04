@@ -21,6 +21,7 @@ export interface AssistantPanelOptions {
   tools: AssistantTool[];
   nano: ModelAdapter;
   cloud?: ModelAdapter;
+  local?: ModelAdapter;
 }
 
 export class AssistantPanel {
@@ -29,6 +30,7 @@ export class AssistantPanel {
   private readonly assistant: Assistant;
   private readonly nano: ModelAdapter;
   private readonly cloud?: ModelAdapter;
+  private readonly local?: ModelAdapter;
   private activeId: string;
 
   private root!: HTMLElement;
@@ -46,12 +48,15 @@ export class AssistantPanel {
     this.bus = opts.bus;
     this.nano = opts.nano;
     this.cloud = opts.cloud;
+    this.local = opts.local;
     this.activeId = "nano";
     this.assistant = new Assistant(opts.tools, () => this.activeAdapter());
   }
 
   private activeAdapter(): ModelAdapter {
-    return this.activeId === "cloud" && this.cloud ? this.cloud : this.nano;
+    if (this.activeId === "cloud" && this.cloud) return this.cloud;
+    if (this.activeId === "local" && this.local) return this.local;
+    return this.nano;
   }
 
   mount(body: HTMLElement): void {
@@ -92,6 +97,7 @@ export class AssistantPanel {
     const models = div("asst-models");
     models.append(this.modelRadio("nano", "Nano"));
     if (this.cloud) models.append(this.modelRadio("cloud", this.cloud.label || "Cloud"));
+    if (this.local) models.append(this.modelRadio("local", this.local.label || "Local GPU"));
 
     const codegen = document.createElement("label");
     codegen.className = "asst-codegen";
@@ -165,7 +171,13 @@ export class AssistantPanel {
     }
     this.banner.hidden = false;
     if (info.state === "downloadable") {
-      this.banner.append(text("The on-device model needs a one-time download. "));
+      this.banner.append(
+        text(
+          adapter.id === "local"
+            ? `${info.detail ?? "The local model needs a one-time download"}. `
+            : "The on-device model needs a one-time download. ",
+        ),
+      );
       const btn = document.createElement("button");
       btn.className = "asst-dl";
       btn.textContent = "Download model";
@@ -177,18 +189,23 @@ export class AssistantPanel {
       this.setEnabled(false);
     } else {
       // unavailable
-      const alt = this.cloud && adapter.id === "nano" ? " Switch to Cloud to use the assistant now." : "";
-      this.banner.append(text(`On-device AI unavailable. ${info.detail ?? ""}.${alt}`));
-      this.setEnabled(this.cloud ? this.activeId === "cloud" : false);
+      const others = [
+        this.cloud && adapter.id !== "cloud" ? "Cloud" : null,
+        this.local && adapter.id !== "local" ? this.local.label || "Local GPU" : null,
+      ].filter(Boolean);
+      const alt = others.length ? ` Switch to ${others.join(" or ")} to use the assistant now.` : "";
+      this.banner.append(text(`${adapter.label} unavailable. ${info.detail ?? ""}.${alt}`));
+      this.setEnabled(false);
     }
   }
 
   private async download(): Promise<void> {
+    const adapter = this.activeAdapter();
     this.banner.textContent = "";
     const label = text("Downloading… 0%");
     this.banner.append(label);
     try {
-      await this.nano.prepare?.((f) => (label.textContent = `Downloading… ${Math.round(f * 100)}%`));
+      await adapter.prepare?.((f) => (label.textContent = `Downloading… ${Math.round(f * 100)}%`));
     } catch (e) {
       this.banner.textContent = `Download failed: ${(e as Error).message}`;
       return;

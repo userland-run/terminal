@@ -8,6 +8,7 @@
 // the type from @sdk; this local copy keeps the terminal's own build typed.
 
 import type { CloudModelConfig } from "./assistant/types";
+import type { LocalModelConfig } from "./assistant/local";
 
 export interface TerminalPreviewConfig {
   /** Ports offered in the preview port selector. Default [8080]. */
@@ -38,6 +39,12 @@ export interface TerminalAssistantConfig {
    * projects. Omit to run Nano-only (fully on-device, no secrets).
    */
   cloud?: CloudModelConfig;
+  /**
+   * Local WebGPU model (nanoinfer engine): fully in-browser inference, weights
+   * OPFS-cached after a one-time download. `false` hides the option; omit to
+   * offer it whenever WebGPU + the default same-origin assets are present.
+   */
+  local?: LocalModelConfig | false;
 }
 
 export interface TerminalConfig {
