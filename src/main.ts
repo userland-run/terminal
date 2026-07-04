@@ -34,7 +34,8 @@ import { createVmTools } from "./assistant/tools";
 import { createBuildTool } from "./assistant/build";
 import { createNanoAdapter } from "./assistant/nano";
 import { createCloudAdapter } from "./assistant/cloud";
-import { createLocalAdapter } from "./assistant/local";
+import { createLocalModel } from "./assistant/local";
+import { installLlmBridge } from "./assistant/llm-bridge";
 import { AssistantPanel } from "./assistant/panel";
 import { registerWebMcpTools } from "./assistant/webmcp";
 
@@ -547,10 +548,15 @@ export async function createTerminal(
   if (cfg.features.assistant) {
     const nano = createNanoAdapter();
     const cloud = cfg.assistant.cloud ? createCloudAdapter(cfg.assistant.cloud) : undefined;
-    const local =
+    const localModel =
       cfg.assistant.local === false
         ? undefined
-        : createLocalAdapter(cfg.assistant.local ?? {});
+        : createLocalModel(cfg.assistant.local ?? {});
+    const local = localModel?.adapter;
+    // Guest-facing OpenAI facade: processes INSIDE the VM reach the local
+    // WebGPU model at http://nanoinfer.internal/v1/... via /dev/__net__.
+    // (typeof guard: tolerate an older vendored container without the hook.)
+    if (localModel && typeof vm.setLlmBridge === "function") installLlmBridge(vm, localModel);
     // One shared registry drives both the in-page router and WebMCP.
     const tools = [...createVmTools(handle, stdoutBus), createBuildTool(handle, stdoutBus)];
     const host = byId("assistant-host");

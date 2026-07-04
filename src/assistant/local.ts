@@ -54,13 +54,62 @@ interface WorkerEvent {
 }
 
 /** Rough token estimate for history trimming (~3.5 chars/token for code). */
-const estimateTokens = (s: string) => Math.ceil(s.length / 3.5);
+export const estimateTokens = (s: string) => Math.ceil(s.length / 3.5);
 
-export function createLocalAdapter(config: LocalModelConfig = {}): ModelAdapter {
+/**
+ * Build the Qwen ChatML template: system block, as many recent turns as fit the
+ * token `budget`, then the user turn and the assistant cue. Shared by the panel
+ * adapter and the guest-facing LLM bridge (llm-bridge.ts) so both produce the
+ * exact prompt shape the model was tuned for.
+ */
+export function buildQwenPrompt(
+  system: string,
+  history: ChatTurn[],
+  userText: string,
+  budget: number,
+): string {
+  const head = `<|im_start|>system\n${system}<|im_end|>\n`;
+  const tail = `<|im_start|>user\n${userText}<|im_end|>\n<|im_start|>assistant\n`;
+  let used = estimateTokens(head) + estimateTokens(tail);
+  const kept: string[] = [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const turn = history[i];
+    const block = `<|im_start|>${turn.role}\n${turn.content}<|im_end|>\n`;
+    const cost = estimateTokens(block);
+    if (used + cost > budget) break;
+    used += cost;
+    kept.unshift(block);
+  }
+  return head + kept.join("") + tail;
+}
+
+/**
+ * Lower-level handle around the engine worker: the panel-facing
+ * {@link ModelAdapter} plus raw-prompt streaming access for the guest-facing
+ * OpenAI facade (llm-bridge.ts), which needs its own chat template and SSE
+ * framing rather than the adapter's route/chat semantics.
+ */
+export interface LocalModel {
+  /** The panel-facing adapter (unchanged public surface). */
+  adapter: ModelAdapter;
+  /** KV capacity in tokens (bounds prompt + generation). */
+  readonly maxSeq: number;
+  /** True once the engine is initialized (weights on the GPU). */
+  isReady(): boolean;
+  /** True while a generation is in flight (single-session engine). */
+  isBusy(): boolean;
+  /** Initialize the engine (may download weights); same as adapter.prepare. */
+  ensureReady(onProgress?: (fraction: number) => void): Promise<void>;
+  /** Stream a completion for a fully-templated raw prompt. */
+  rawGenerate(prompt: string, steps: number, onDelta?: (delta: string) => void): Promise<string>;
+}
+
+export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
   const cfg = { ...DEFAULTS, ...config };
   let worker: Worker | null = null;
   let ready = false;
   let preparing = false;
+  let inFlight = 0;
   let nextId = 1;
   let lastUsage: { used: number; quota: number } | null = null;
 
@@ -78,25 +127,13 @@ export function createLocalAdapter(config: LocalModelConfig = {}): ModelAdapter 
   }
 
   /** Build the full Qwen chat template, trimming old turns to fit the KV. */
-  function buildPrompt(userText: string, history: ChatTurn[], budget: number): string {
-    const head = `<|im_start|>system\n${SYSTEM_PROMPT}<|im_end|>\n`;
-    const tail = `<|im_start|>user\n${userText}<|im_end|>\n<|im_start|>assistant\n`;
-    let used = estimateTokens(head) + estimateTokens(tail);
-    const kept: string[] = [];
-    for (let i = history.length - 1; i >= 0; i--) {
-      const turn = history[i];
-      const block = `<|im_start|>${turn.role}\n${turn.content}<|im_end|>\n`;
-      const cost = estimateTokens(block);
-      if (used + cost > budget) break;
-      used += cost;
-      kept.unshift(block);
-    }
-    return head + kept.join("") + tail;
-  }
+  const buildPrompt = (userText: string, history: ChatTurn[], budget: number) =>
+    buildQwenPrompt(SYSTEM_PROMPT, history, userText, budget);
 
   function generate(prompt: string, steps: number, onDelta?: (d: string) => void): Promise<string> {
     const w = spawn();
     const id = nextId++;
+    inFlight++;
     return new Promise((resolve, reject) => {
       let text = "";
       handlers.set(id, (ev) => {
@@ -105,6 +142,7 @@ export function createLocalAdapter(config: LocalModelConfig = {}): ModelAdapter 
           onDelta?.(ev.text ?? "");
         } else if (ev.type === "done") {
           handlers.delete(id);
+          inFlight--;
           const s = ev.stats ?? {};
           lastUsage = {
             used: (s.prefill_tokens ?? 0) + (s.generated ?? 0),
@@ -113,11 +151,46 @@ export function createLocalAdapter(config: LocalModelConfig = {}): ModelAdapter 
           resolve(text);
         } else if (ev.type === "error") {
           handlers.delete(id);
+          inFlight--;
           reject(new Error(ev.message ?? "local model error"));
         }
       });
       w.postMessage({ type: "chat", id, prompt, steps });
     });
+  }
+
+  async function ensureReady(onProgress?: (fraction: number) => void): Promise<void> {
+    if (ready) return;
+    preparing = true;
+    const w = spawn();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        handlers.set(0, (ev) => {
+          if (ev.type === "progress" && ev.total) {
+            const f = (ev.loaded ?? 0) / ev.total;
+            // download 0..0.8, GPU upload 0.8..1.0
+            onProgress?.(ev.phase === "download" ? f * 0.8 : 0.8 + f * 0.2);
+          } else if (ev.type === "ready") {
+            handlers.delete(0);
+            resolve();
+          } else if (ev.type === "error") {
+            handlers.delete(0);
+            reject(new Error(ev.message ?? "engine init failed"));
+          }
+        });
+        w.postMessage({
+          type: "init",
+          ggufUrl: cfg.ggufUrl,
+          tokenizerUrl: cfg.tokenizerUrl,
+          engineBase: cfg.engineBase,
+          maxSeq: cfg.maxSeq,
+        });
+      });
+      ready = true;
+      onProgress?.(1);
+    } finally {
+      preparing = false;
+    }
   }
 
   function parseJson<T>(raw: string): T {
@@ -137,7 +210,7 @@ export function createLocalAdapter(config: LocalModelConfig = {}): ModelAdapter 
     return m ? { lang: m[1] || "js", code: m[2] } : null;
   }
 
-  return {
+  const adapter: ModelAdapter = {
     id: "local",
     label: cfg.label ?? "Local GPU",
 
@@ -162,39 +235,7 @@ export function createLocalAdapter(config: LocalModelConfig = {}): ModelAdapter 
       };
     },
 
-    async prepare(onProgress?: (fraction: number) => void): Promise<void> {
-      if (ready) return;
-      preparing = true;
-      const w = spawn();
-      try {
-        await new Promise<void>((resolve, reject) => {
-          handlers.set(0, (ev) => {
-            if (ev.type === "progress" && ev.total) {
-              const f = (ev.loaded ?? 0) / ev.total;
-              // download 0..0.8, GPU upload 0.8..1.0
-              onProgress?.(ev.phase === "download" ? f * 0.8 : 0.8 + f * 0.2);
-            } else if (ev.type === "ready") {
-              handlers.delete(0);
-              resolve();
-            } else if (ev.type === "error") {
-              handlers.delete(0);
-              reject(new Error(ev.message ?? "engine init failed"));
-            }
-          });
-          w.postMessage({
-            type: "init",
-            ggufUrl: cfg.ggufUrl,
-            tokenizerUrl: cfg.tokenizerUrl,
-            engineBase: cfg.engineBase,
-            maxSeq: cfg.maxSeq,
-          });
-        });
-        ready = true;
-        onProgress?.(1);
-      } finally {
-        preparing = false;
-      }
-    },
+    prepare: ensureReady,
 
     async route(userText, tools: AssistantTool[], history): Promise<RouteDecision> {
       const names = tools.map((t) => t.name);
@@ -250,7 +291,22 @@ export function createLocalAdapter(config: LocalModelConfig = {}): ModelAdapter 
       worker?.terminate();
       worker = null;
       ready = false;
+      inFlight = 0;
       handlers.clear();
     },
   };
+
+  return {
+    adapter,
+    maxSeq: cfg.maxSeq,
+    isReady: () => ready,
+    isBusy: () => inFlight > 0,
+    ensureReady,
+    rawGenerate: generate,
+  };
+}
+
+/** Back-compat convenience: just the panel-facing adapter. */
+export function createLocalAdapter(config: LocalModelConfig = {}): ModelAdapter {
+  return createLocalModel(config).adapter;
 }

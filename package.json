@@ -12,7 +12,8 @@
     "prebuild": "npm run sync-sw && npm run gen:css",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:bridge": "node --test test/llm-bridge.test.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",

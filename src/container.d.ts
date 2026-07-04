@@ -32,6 +32,20 @@ declare module "@container/nanovm.mjs" {
   export interface ConnectionInjector {
     injectConnection(port: number, httpRequest: string): Promise<Uint8Array>;
   }
+  /** A guest HTTP request to the internal origin, as handed to the LLM bridge. */
+  export interface LlmBridgeRequest {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    body: string;
+  }
+  /** A plain-object LLM bridge response (alternative to a WHATWG Response). */
+  export interface LlmBridgeResult {
+    status?: number;
+    statusText?: string;
+    headers?: Record<string, string>;
+    body?: Uint8Array | string | ReadableStream<Uint8Array>;
+  }
   export class NanoVM {
     static create(opts: {
       ramMB?: number;
@@ -64,6 +78,18 @@ declare module "@container/nanovm.mjs" {
     readonly servingPort: number | null;
     /** In-VM HTTP connection injector (serve mode). */
     readonly virtualServer: ConnectionInjector;
+    /**
+     * Register an in-page LLM bridge: guest requests to `nanoinfer.internal`
+     * (over /dev/__net__) bypass fetch() and are served by `handler`; a
+     * ReadableStream body streams to the guest incrementally (SSE-capable).
+     * Pass `null` to unregister. Guard with a typeof check — an older vendored
+     * container may predate it.
+     */
+    setLlmBridge(
+      handler:
+        | ((req: LlmBridgeRequest) => Response | LlmBridgeResult | Promise<Response | LlmBridgeResult>)
+        | null,
+    ): void;
     writeStdin(data: Uint8Array | string): void;
     setInteractiveStdin(on?: boolean): void;
     closeStdin(): void;

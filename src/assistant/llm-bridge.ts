@@ -1,0 +1,233 @@
+// SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-UEL
+// Copyright (C) 2026 And The Next GmbH - https://userland.run
+// Part of the userland.run terminal; dual-licensed - see LICENSE.md.
+
+// Guest-facing OpenAI facade for the local WebGPU model: the NanoVM container
+// routes any guest request to http://nanoinfer.internal/* (via /dev/__net__)
+// to the handler registered with vm.setLlmBridge(). This module implements
+// that handler on top of the "Local GPU" engine (local.ts), so a process
+// INSIDE the VM can POST /v1/chat/completions — including stream:true, served
+// as OpenAI chat.completion.chunk SSE frames flowing to the guest token-by-
+// token — with zero network involved.
+
+import { buildQwenPrompt, estimateTokens, type LocalModel } from "./local";
+import type { ChatTurn } from "./types";
+import type { LlmBridgeRequest, LlmBridgeResult, NanoVM } from "@container/nanovm.mjs";
+
+export const LLM_BRIDGE_MODEL_ID = "nanoinfer-local";
+
+const DEFAULT_SYSTEM =
+  "You are a helpful assistant running fully locally, on the user's GPU, " +
+  "answering a program inside a browser-hosted Linux VM. Be concise.";
+
+/** OpenAI-ish request body subset we honor. */
+interface ChatCompletionRequest {
+  model?: string;
+  messages?: Array<{ role?: string; content?: unknown }>;
+  stream?: boolean;
+  max_tokens?: number;
+}
+
+function json(status: number, statusText: string, payload: unknown): LlmBridgeResult {
+  return {
+    status,
+    statusText,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  };
+}
+
+function errorJson(status: number, statusText: string, message: string, type: string) {
+  return json(status, statusText, { error: { message, type, param: null, code: null } });
+}
+
+/** Flatten an OpenAI `content` (string or content-part array) to plain text. */
+function textOf(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((p) =>
+        typeof p === "string"
+          ? p
+          : typeof (p as { text?: unknown })?.text === "string"
+            ? (p as { text: string }).text
+            : "",
+      )
+      .join("");
+  }
+  return "";
+}
+
+/**
+ * Build the `{method,url,headers,body}` → `{status,headers,body}` handler the
+ * container's setLlmBridge() expects. Routes:
+ *   GET  /v1/models            → the one local model
+ *   POST /v1/chat/completions  → chat.completion (or SSE chunk stream)
+ * Never triggers the weights download itself: an unprepared model answers 503
+ * so a guest request can't silently start a ~1 GB fetch.
+ */
+export function createLlmBridgeHandler(
+  local: LocalModel,
+): (req: LlmBridgeRequest) => Promise<LlmBridgeResult> {
+  return async (req) => {
+    let path: string;
+    try {
+      path = new URL(req.url).pathname;
+    } catch {
+      path = req.url;
+    }
+
+    if (path === "/v1/models" && req.method === "GET") {
+      return json(200, "OK", {
+        object: "list",
+        data: [
+          { id: LLM_BRIDGE_MODEL_ID, object: "model", created: 0, owned_by: "nanoinfer" },
+        ],
+      });
+    }
+
+    if (path !== "/v1/chat/completions") {
+      return errorJson(404, "Not Found", `no route: ${req.method} ${path}`, "invalid_request_error");
+    }
+    if (req.method !== "POST") {
+      return errorJson(405, "Method Not Allowed", "use POST /v1/chat/completions", "invalid_request_error");
+    }
+
+    let body: ChatCompletionRequest;
+    try {
+      body = JSON.parse(req.body || "") as ChatCompletionRequest;
+    } catch {
+      return errorJson(400, "Bad Request", "request body is not valid JSON", "invalid_request_error");
+    }
+    const messages = body.messages;
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return errorJson(400, "Bad Request", '"messages" must be a non-empty array', "invalid_request_error");
+    }
+
+    if (!local.isReady()) {
+      return errorJson(
+        503,
+        "Service Unavailable",
+        'Local model is not loaded. In the terminal page, open the Assistant panel, ' +
+          'switch the model to "Local GPU" and let it prepare (one-time ~1.1 GB download, ' +
+          "cached in the browser) — then retry this request. Guest requests never start " +
+          "the download themselves.",
+        "model_not_loaded",
+      );
+    }
+    if (local.isBusy()) {
+      return errorJson(
+        429,
+        "Too Many Requests",
+        "the local model is generating for another request; retry shortly",
+        "model_busy",
+      );
+    }
+
+    // Map the OpenAI transcript onto the Qwen template: system messages fold
+    // into the system block, the trailing user message becomes the live turn.
+    const system =
+      messages
+        .filter((m) => m.role === "system")
+        .map((m) => textOf(m.content))
+        .join("\n") || DEFAULT_SYSTEM;
+    const turns: ChatTurn[] = messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role as "user" | "assistant", content: textOf(m.content) }));
+    const last = turns.pop();
+    if (!last || last.role !== "user") {
+      return errorJson(400, "Bad Request", "the last message must have role \"user\"", "invalid_request_error");
+    }
+
+    const steps = Math.min(Math.max(1, Math.floor(body.max_tokens ?? 512)), Math.max(64, local.maxSeq - 256));
+    const budget = Math.max(256, local.maxSeq - steps - 64);
+    const prompt = buildQwenPrompt(system, turns, last.content, budget);
+
+    const model = typeof body.model === "string" && body.model ? body.model : LLM_BRIDGE_MODEL_ID;
+    const id = `chatcmpl-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const created = Math.floor(Date.now() / 1000);
+
+    if (body.stream) {
+      const enc = new TextEncoder();
+      const chunk = (delta: Record<string, unknown>, finish: string | null = null) => ({
+        id,
+        object: "chat.completion.chunk",
+        created,
+        model,
+        choices: [{ index: 0, delta, finish_reason: finish }],
+      });
+      let cancelled = false;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const send = (frame: unknown) => {
+            if (cancelled) return;
+            const data = typeof frame === "string" ? frame : JSON.stringify(frame);
+            try {
+              controller.enqueue(enc.encode(`data: ${data}\n\n`));
+            } catch {
+              cancelled = true; // guest closed mid-stream; drop further frames
+            }
+          };
+          send(chunk({ role: "assistant", content: "" }));
+          local
+            .rawGenerate(prompt, steps, (delta) => {
+              if (delta) send(chunk({ content: delta }));
+            })
+            .then(() => {
+              send(chunk({}, "stop"));
+              send("[DONE]");
+            })
+            .catch((e: unknown) => {
+              send({ error: { message: e instanceof Error ? e.message : String(e), type: "server_error" } });
+            })
+            .finally(() => {
+              try {
+                controller.close();
+              } catch {
+                /* already closed/cancelled */
+              }
+            });
+        },
+        cancel() {
+          cancelled = true; // generation itself is not abortable; just go quiet
+        },
+      });
+      return {
+        status: 200,
+        statusText: "OK",
+        headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+        body: stream,
+      };
+    }
+
+    try {
+      const text = await local.rawGenerate(prompt, steps);
+      const promptTokens = estimateTokens(prompt);
+      const completionTokens = estimateTokens(text);
+      return json(200, "OK", {
+        id,
+        object: "chat.completion",
+        created,
+        model,
+        choices: [
+          { index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" },
+        ],
+        usage: {
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          total_tokens: promptTokens + completionTokens,
+        },
+      });
+    } catch (e) {
+      return errorJson(500, "Internal Server Error", e instanceof Error ? e.message : String(e), "server_error");
+    }
+  };
+}
+
+/**
+ * Wire the local model into the VM: from then on, guest processes can reach
+ * the in-browser model at http://nanoinfer.internal/v1/... over /dev/__net__.
+ */
+export function installLlmBridge(vm: NanoVM, local: LocalModel): void {
+  vm.setLlmBridge(createLlmBridgeHandler(local));
+}
