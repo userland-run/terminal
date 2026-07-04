@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Console — the terminal front-end for userland.run / NanoVM",
   "scripts": {
-    "sync-sw": "cp ../sdk/static/nano-sw.js public/nano-sw.js",
+    "sync-sw": "node -e \"const fs=require('fs');const src='../sdk/static/nano-sw.js';if(fs.existsSync(src)){fs.copyFileSync(src,'public/nano-sw.js');console.log('nano-sw synced')}else console.log('sibling sdk absent; keeping checked-in nano-sw.js')\"",
     "gen:css": "node scripts/gen-ui-css.mjs",
     "predev": "npm run sync-sw && npm run gen:css",
     "dev": "vite",
