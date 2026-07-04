@@ -34,6 +34,20 @@ jobs:
           repository: userland-run/nano
           path: nano
 
+      # src/preview.ts imports @sdk → ../sdk/dist/index.js (vite.config.ts),
+      # so the sibling sdk must be checked out AND built.
+      - name: Checkout sdk (sibling, for the @sdk alias)
+        uses: actions/checkout@v4
+        with:
+          repository: userland-run/sdk
+          path: sdk
+
+      - name: Build sdk (provides ../sdk/dist for the @sdk alias)
+        working-directory: sdk
+        run: |
+          npm ci
+          npm run build
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
