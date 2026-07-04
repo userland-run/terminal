@@ -42,12 +42,6 @@ jobs:
           repository: userland-run/sdk
           path: sdk
 
-      - name: Build sdk (provides ../sdk/dist for the @sdk alias)
-        working-directory: sdk
-        run: |
-          npm ci
-          npm run build
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -57,6 +51,14 @@ jobs:
       - name: Install dependencies
         working-directory: terminal
         run: npm ci
+
+      # The sdk bundle inlines terminal source whose deps (codemirror, lucide)
+      # resolve from the terminal checkout installed above — build sdk AFTER it.
+      - name: Build sdk (provides ../sdk/dist for the @sdk alias)
+        working-directory: sdk
+        run: |
+          npm ci
+          npm run build
 
       - name: Install Playwright Chromium
         working-directory: terminal
