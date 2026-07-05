@@ -24,7 +24,15 @@ interface ChatMsg {
   steps: number;
 }
 
-type InMsg = InitMsg | ChatMsg;
+/** L3 forced-choice: return exactly one of `choices` (guaranteed-valid routing). */
+interface ChooseMsg {
+  type: "choose";
+  id: number;
+  prompt: string;
+  choices: string[];
+}
+
+type InMsg = InitMsg | ChatMsg | ChooseMsg;
 
 interface QwenSessionLike {
   adapter(): string;
@@ -35,6 +43,7 @@ interface QwenSessionLike {
     raw: boolean,
     onToken: (piece: string) => void,
   ): Promise<string>;
+  generateChoice(prompt: string, choices: string[], raw: boolean): Promise<string>;
 }
 
 let session: QwenSessionLike | null = null;
@@ -123,14 +132,21 @@ async function chat(msg: ChatMsg): Promise<void> {
   post({ type: "done", id: msg.id, stats: JSON.parse(stats) as Record<string, number> });
 }
 
+async function choose(msg: ChooseMsg): Promise<void> {
+  if (!session) throw new Error("session not initialized");
+  const choice = await session.generateChoice(msg.prompt, msg.choices, false);
+  post({ type: "done", id: msg.id, choice });
+}
+
 self.addEventListener("message", (event: MessageEvent<InMsg>) => {
   const msg = event.data;
   const fail = (e: unknown) =>
     post({
       type: "error",
-      id: msg.type === "chat" ? msg.id : undefined,
+      id: msg.type === "init" ? undefined : msg.id,
       message: e instanceof Error ? e.message : String(e),
     });
   if (msg.type === "init") void init(msg).catch(fail);
   else if (msg.type === "chat") void chat(msg).catch(fail);
+  else if (msg.type === "choose") void choose(msg).catch(fail);
 });

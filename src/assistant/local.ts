@@ -51,6 +51,8 @@ interface WorkerEvent {
   message?: string;
   adapter?: string;
   stats?: Record<string, number>;
+  /** Result of a "choose" (L3 forced-choice) request. */
+  choice?: string;
 }
 
 /** Rough token estimate for history trimming (~3.5 chars/token for code). */
@@ -159,6 +161,56 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
     });
   }
 
+  /**
+   * L3 forced choice: return exactly one of `choices` (the engine masks the
+   * sampler to the tokenized options, so the result is guaranteed valid). Used
+   * for reliable tool routing — no JSON parsing, no invalid-tool fallback.
+   */
+  function chooseOne(prompt: string, choices: string[]): Promise<string> {
+    const w = spawn();
+    const id = nextId++;
+    inFlight++;
+    return new Promise((resolve, reject) => {
+      handlers.set(id, (ev) => {
+        if (ev.type === "done") {
+          handlers.delete(id);
+          inFlight--;
+          resolve(ev.choice ?? choices[0]!);
+        } else if (ev.type === "error") {
+          handlers.delete(id);
+          inFlight--;
+          reject(new Error(ev.message ?? "local model choose error"));
+        }
+      });
+      w.postMessage({ type: "choose", id, prompt, choices });
+    });
+  }
+
+  /** Legacy single-shot JSON routing (fallback when forced-choice errors). */
+  async function routeViaJson(
+    userText: string,
+    tools: AssistantTool[],
+    history: ChatTurn[],
+  ): Promise<RouteDecision> {
+    const names = tools.map((t) => t.name);
+    const toolLines = tools.map((t) => `- ${t.name}: ${t.description}`).join("\n");
+    const ask =
+      `Available tools:\n${toolLines}\n\nThe user said: "${userText}"\n` +
+      `Reply with ONLY a JSON object: {"tool": <one of ${JSON.stringify([...names, "chat"])}>, ` +
+      `"args": <arguments object for that tool, {} if none>, ` +
+      `"say": <your reply text, only when tool is "chat">}`;
+    const raw = await generate(buildPrompt(ask, history, cfg.maxSeq - 512), 384);
+    try {
+      const parsed = parseJson<Partial<RouteDecision>>(raw);
+      if (!parsed.tool || (parsed.tool !== "chat" && !names.includes(parsed.tool))) {
+        return { tool: "chat", args: {}, say: raw };
+      }
+      return { tool: parsed.tool, args: parsed.args ?? {}, say: parsed.say };
+    } catch {
+      return { tool: "chat", args: {}, say: raw };
+    }
+  }
+
   async function ensureReady(onProgress?: (fraction: number) => void): Promise<void> {
     if (ready) return;
     preparing = true;
@@ -240,22 +292,49 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
     async route(userText, tools: AssistantTool[], history): Promise<RouteDecision> {
       const names = tools.map((t) => t.name);
       const toolLines = tools.map((t) => `- ${t.name}: ${t.description}`).join("\n");
-      const ask =
+
+      // Phase 1: pick the tool under an L3 forced-choice mask, so the result is
+      // GUARANTEED to be a real tool name (or "chat") — no JSON parsing, no
+      // invalid-tool fallback. Falls back to the JSON path if masking errors
+      // (e.g. a tool name that doesn't tokenize cleanly).
+      const choicePrompt = buildPrompt(
         `Available tools:\n${toolLines}\n\nThe user said: "${userText}"\n` +
-        `Reply with ONLY a JSON object: {"tool": <one of ${JSON.stringify([...names, "chat"])}>, ` +
-        `"args": <arguments object for that tool, {} if none>, ` +
-        `"say": <your reply text, only when tool is "chat">}`;
-      const prompt = buildPrompt(ask, history, cfg.maxSeq - 512);
-      const raw = await generate(prompt, 384);
+          `Which single tool best handles this? Answer "chat" for a plain reply.`,
+        history,
+        cfg.maxSeq - 256,
+      );
+      let tool: string;
       try {
-        const parsed = parseJson<Partial<RouteDecision>>(raw);
-        if (!parsed.tool || (parsed.tool !== "chat" && !names.includes(parsed.tool))) {
-          return { tool: "chat", args: {}, say: raw };
-        }
-        return { tool: parsed.tool, args: parsed.args ?? {}, say: parsed.say };
+        tool = await chooseOne(choicePrompt, [...names, "chat"]);
       } catch {
-        // Not JSON — treat the whole reply as chat.
-        return { tool: "chat", args: {}, say: raw };
+        return routeViaJson(userText, tools, history);
+      }
+
+      if (tool === "chat" || !names.includes(tool)) {
+        const say = await generate(
+          buildPrompt(userText, history, cfg.maxSeq - 640),
+          512,
+        );
+        return { tool: "chat", args: {}, say };
+      }
+
+      // Phase 2: fill the chosen tool's arguments (free-form JSON under its own
+      // schema); a no-arg tool skips the call.
+      const selected = tools.find((t) => t.name === tool)!;
+      const props = (selected.inputSchema as { properties?: Record<string, unknown> }).properties;
+      if (!props || Object.keys(props).length === 0) {
+        return { tool, args: {} };
+      }
+      const argAsk =
+        `The user said: "${userText}"\nYou are calling the tool "${tool}" ` +
+        `(${selected.description}). Reply with ONLY its arguments as a JSON object.`;
+      try {
+        const args = parseJson<Record<string, unknown>>(
+          await generate(buildPrompt(argAsk, history, cfg.maxSeq - 512), 384),
+        );
+        return { tool, args: args && typeof args === "object" ? args : {} };
+      } catch {
+        return { tool, args: {} };
       }
     },
 
