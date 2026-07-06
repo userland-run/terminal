@@ -216,11 +216,17 @@ export function createLlmBridgeHandler(
         const toolLines = tools
           .map((t) => `- ${t.function!.name}: ${t.function!.description ?? ""}`)
           .join("\n");
+        // Instruction shape from nanoinfer's route-eval harness (the plain
+        // "which tool best handles this?" ask makes the 1.5B answer "none"
+        // for nearly everything). Caller tools are arbitrary, so no
+        // terminal-specific exemplars here — just the action-list framing.
         const pickPrompt = buildQwenPrompt(
           system,
           turns,
-          `Available tools:\n${toolLines}\n\nThe user said: "${last.content}"\n` +
-            'Which single tool best handles this? Answer "none" for a plain reply.',
+          `Pick the ONE action that fulfills the user's request.\n\nActions:\n${toolLines}\n` +
+            `- none: reply in plain language (only when no tool applies)\n\n` +
+            `User request: "${last.content}"\n` +
+            `Reply with the action name only.`,
           budget,
         );
         try {

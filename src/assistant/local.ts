@@ -466,9 +466,29 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
         // is GUARANTEED to be a real tool name (or "chat") — no JSON parsing,
         // no invalid-tool fallback. Falls back to the JSON path if masking
         // errors (e.g. a tool name that doesn't tokenize cleanly).
+        // Prompt shape picked by nanoinfer's `route-eval` harness: the shipped
+        // ask scored 3/16 on the 1.5B (it answered "chat" for everything);
+        // this 12-exemplar few-shot form scores 14/16. Exemplars name the
+        // stock terminal tools — with a custom tool registry they are mild
+        // prompt noise at worst (the forced choice only allows real names).
         const choicePrompt = buildPrompt(
-          `Available tools:\n${toolLines}\n\nThe user said: "${userText}"\n` +
-            `Which single tool best handles this? Answer "chat" for a plain reply.`,
+          `Pick the ONE action that fulfills the user's request.\n\nActions:\n${toolLines}\n` +
+            `- chat: reply in plain language (questions, explanations, conversation)\n\n` +
+            `Examples:\n` +
+            `"read the file /app/readme.md" -> read_file\n` +
+            `"what's inside /etc/passwd" -> read_file\n` +
+            `"run ls /tmp" -> run_shell\n` +
+            `"run rm -rf /tmp/junk" -> run_shell\n` +
+            `"remove the old log files" -> run_shell\n` +
+            `"show me the files" -> list_dir\n` +
+            `"save hello to /tmp/a.txt" -> write_file\n` +
+            `"launch web.js as a server" -> serve\n` +
+            `"what is the capital of Japan?" -> chat\n` +
+            `"who wrote Hamlet?" -> chat\n` +
+            `"explain how promises work" -> chat\n` +
+            `"hello!" -> chat\n\n` +
+            `User request: "${userText}"\n` +
+            `Reply with the action name only.`,
           history,
           cfg.maxSeq - 256,
         );
