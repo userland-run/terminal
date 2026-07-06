@@ -28,9 +28,18 @@ export interface LocalModelConfig {
   label?: string;
 }
 
+// Default weights: the userland-run Hugging Face repo. HF `resolve` URLs
+// send `Access-Control-Allow-Origin: *`, so they load from our
+// cross-origin-isolated pages; the engine worker's OPFS cache (keyed by
+// filename) makes it a one-time download per browser profile. Deployments
+// therefore need no local model assets; self-hosters can still point
+// `TerminalAssistantConfig.local` at their own URLs.
+const HF_MODEL_BASE =
+  "https://huggingface.co/userland-run/qwen2.5-coder-1.5b-instruct-q4-nanoinfer/resolve/main";
+
 const DEFAULTS = {
-  ggufUrl: "/models/qwen2.5-coder-1.5b-instruct-q4_0.gguf",
-  tokenizerUrl: "/models/tokenizer.json",
+  ggufUrl: `${HF_MODEL_BASE}/qwen2.5-coder-1.5b-instruct-q4_0.gguf`,
+  tokenizerUrl: `${HF_MODEL_BASE}/tokenizer.json`,
   engineBase: "/nanoinfer-engine",
   maxSeq: 2048,
 };
