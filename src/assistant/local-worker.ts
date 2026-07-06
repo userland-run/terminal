@@ -10,6 +10,9 @@
 
 interface InitMsg {
   type: "init";
+  /** "qwen" (default) or "ornith" (the 9B GDN hybrid). */
+  engine?: "qwen" | "ornith";
+  /** Qwen path: GGUF; Ornith path: the packed Q4 safetensors artifact. */
   ggufUrl: string;
   tokenizerUrl: string;
   engineBase: string;
@@ -91,6 +94,12 @@ type InMsg =
   | RestoreMsg
   | DropCkptMsg;
 
+interface OrnithSessionLike {
+  adapter(): string;
+  reset(): void;
+  generate(prompt: string, steps: number, onToken: (piece: string) => void): Promise<string>;
+}
+
 interface QwenSessionLike {
   adapter(): string;
   reset(): void;
@@ -109,12 +118,19 @@ interface QwenSessionLike {
 }
 
 let session: QwenSessionLike | null = null;
+let ornith: OrnithSessionLike | null = null;
 
 const post = (msg: unknown) => (self as unknown as Worker).postMessage(msg);
 
 /** Fetch with OPFS caching: one download per browser profile, ever. */
+/** OPFS cache key: the full URL, sanitized. Basenames alone collide — the
+ *  Qwen and Ornith artifacts are both served as `tokenizer.json`. */
+function cacheKey(url: string): string {
+  return encodeURIComponent(new URL(url, self.location.href).href);
+}
+
 async function cachedFetch(url: string, label: string): Promise<Uint8Array> {
-  const name = url.split("/").pop() ?? "model.bin";
+  const name = cacheKey(url);
   let dir: FileSystemDirectoryHandle | null = null;
   try {
     const root = await navigator.storage.getDirectory();
@@ -162,7 +178,87 @@ async function cachedFetch(url: string, label: string): Promise<Uint8Array> {
   return bytes;
 }
 
+/** Stream a URL into an OPFS file (skip when cached); return its handle. */
+async function fetchToOpfs(url: string, label: string): Promise<FileSystemFileHandle> {
+  const name = cacheKey(url);
+  const root = await navigator.storage.getDirectory();
+  const dir = await root.getDirectoryHandle("nanoinfer-models", { create: true });
+  try {
+    const handle = await dir.getFileHandle(name);
+    const file = await handle.getFile();
+    if (file.size > 0) {
+      post({ type: "progress", phase: "download", label, loaded: file.size, total: file.size });
+      return handle;
+    }
+  } catch {
+    // not cached
+  }
+  const resp = await fetch(url);
+  if (!resp.ok || !resp.body) throw new Error(`${url}: HTTP ${resp.status}`);
+  const total = Number(resp.headers.get("content-length") ?? 0);
+  const handle = await dir.getFileHandle(name, { create: true });
+  const writable = await handle.createWritable();
+  const reader = resp.body.getReader();
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    await writable.write(value);
+    received += value.length;
+    post({ type: "progress", phase: "download", label, loaded: received, total });
+  }
+  await writable.close();
+  return handle;
+}
+
+async function initOrnith(msg: InitMsg): Promise<void> {
+  const engine = (await import(/* @vite-ignore */ `${msg.engineBase}/nanoinfer_wasm.js`)) as {
+    default: (opts: { module_or_path: string }) => Promise<unknown>;
+    OrnithSession: {
+      load(
+        readFn: (offset: number, len: number) => Uint8Array,
+        totalLen: number,
+        tokenizer: Uint8Array,
+        maxSeq: number,
+        onProgress: (done: number, total: number) => void,
+      ): Promise<OrnithSessionLike>;
+    };
+  };
+  await engine.default({ module_or_path: `${msg.engineBase}/nanoinfer_wasm_bg.wasm` });
+
+  // The 5.6 GB artifact NEVER enters RAM: it streams into OPFS, then a
+  // worker-only FileSystemSyncAccessHandle serves synchronous reads to the
+  // wasm loader through a reused scratch buffer.
+  const handle = await fetchToOpfs(msg.ggufUrl, "model");
+  // Worker-only API; lib.dom lacks the type.
+  const sync = await (
+    handle as FileSystemFileHandle & {
+      createSyncAccessHandle(): Promise<{
+        read(buffer: Uint8Array, opts?: { at?: number }): number;
+        getSize(): number;
+        close(): void;
+      }>;
+    }
+  ).createSyncAccessHandle();
+  const size = sync.getSize();
+  const scratch = new Uint8Array(1 << 20);
+  const readFn = (offset: number, len: number): Uint8Array => {
+    const n = Math.min(len, scratch.length);
+    const got = sync.read(scratch.subarray(0, n), { at: offset });
+    return scratch.subarray(0, got);
+  };
+  const tokenizer = await cachedFetch(msg.tokenizerUrl, "tokenizer");
+  ornith = await engine.OrnithSession.load(readFn, size, tokenizer, msg.maxSeq, (done, total) => {
+    post({ type: "progress", phase: "upload", loaded: done, total });
+  });
+  sync.close();
+  post({ type: "ready", adapter: ornith.adapter() });
+}
+
 async function init(msg: InitMsg): Promise<void> {
+  if (msg.engine === "ornith") {
+    return initOrnith(msg);
+  }
   const engine = (await import(/* @vite-ignore */ `${msg.engineBase}/nanoinfer_wasm.js`)) as {
     default: (opts: { module_or_path: string }) => Promise<unknown>;
     QwenSession: {
@@ -186,6 +282,14 @@ async function init(msg: InitMsg): Promise<void> {
 }
 
 async function chat(msg: ChatMsg): Promise<void> {
+  if (ornith) {
+    ornith.reset();
+    const stats = await ornith.generate(msg.prompt, msg.steps, (piece) => {
+      post({ type: "delta", id: msg.id, text: piece });
+    });
+    post({ type: "done", id: msg.id, stats: JSON.parse(stats) as Record<string, number> });
+    return;
+  }
   if (!session) throw new Error("session not initialized");
   session.reset();
   const stats = await session.generate(msg.prompt, msg.steps, true, (piece) => {

@@ -17,7 +17,9 @@ import type {
 } from "./types";
 
 export interface LocalModelConfig {
-  /** GGUF model URL. Same-origin or CORS-enabled. */
+  /** "qwen" (default, 1.5B GGUF) or "ornith" (the 9B GDN hybrid, packed Q4). */
+  engine?: "qwen" | "ornith";
+  /** Model URL: GGUF for qwen, packed Q4 safetensors for ornith. */
   ggufUrl?: string;
   /** tokenizer.json URL. */
   tokenizerUrl?: string;
@@ -37,12 +39,49 @@ export interface LocalModelConfig {
 const HF_MODEL_BASE =
   "https://huggingface.co/userland-run/qwen2.5-coder-1.5b-instruct-q4-nanoinfer/resolve/main";
 
+const HF_ORNITH_BASE =
+  "https://huggingface.co/userland-run/ornith-1.0-9b-q4-nanoinfer/resolve/main";
+
 const DEFAULTS = {
+  engine: "qwen" as "qwen" | "ornith",
   ggufUrl: `${HF_MODEL_BASE}/qwen2.5-coder-1.5b-instruct-q4_0.gguf`,
   tokenizerUrl: `${HF_MODEL_BASE}/tokenizer.json`,
   engineBase: "/nanoinfer-engine",
   maxSeq: 2048,
 };
+
+const ORNITH_DEFAULTS = {
+  ggufUrl: `${HF_ORNITH_BASE}/ornith-9b-q4.safetensors`,
+  tokenizerUrl: `${HF_ORNITH_BASE}/tokenizer.json`,
+};
+
+/**
+ * Ornith / Qwen3.5 ChatML: same im_start/im_end framing as Qwen2.5, but the
+ * assistant cue opens a <think> block (reasoning model). The panel closes it
+ * immediately — an empty think block skips reasoning for snappy replies.
+ */
+export function buildOrnithPrompt(
+  system: string,
+  history: ChatTurn[],
+  userText: string,
+  budget: number,
+): string {
+  const head = `<|im_start|>system\n${system}<|im_end|>\n`;
+  const tail =
+    `<|im_start|>user\n${userText}<|im_end|>\n` +
+    `<|im_start|>assistant\n<think>\n\n</think>\n\n`;
+  let used = estimateTokens(head) + estimateTokens(tail);
+  const kept: string[] = [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const turn = history[i];
+    const block = `<|im_start|>${turn.role}\n${turn.content}<|im_end|>\n`;
+    const cost = estimateTokens(block);
+    if (used + cost > budget) break;
+    used += cost;
+    kept.unshift(block);
+  }
+  return head + kept.join("") + tail;
+}
 
 const SYSTEM_PROMPT =
   "You are the assistant inside a browser terminal that runs a real Linux/Node.js " +
@@ -124,7 +163,12 @@ export interface LocalModel {
 }
 
 export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
-  const cfg = { ...DEFAULTS, ...config };
+  const cfg = {
+    ...DEFAULTS,
+    ...(config.engine === "ornith" ? ORNITH_DEFAULTS : {}),
+    ...config,
+  };
+  const isOrnith = cfg.engine === "ornith";
   let worker: Worker | null = null;
   let ready = false;
   let preparing = false;
@@ -158,9 +202,11 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
     return worker;
   }
 
-  /** Build the full Qwen chat template, trimming old turns to fit the KV. */
+  /** Build the engine's chat template, trimming old turns to fit the KV. */
   const buildPrompt = (userText: string, history: ChatTurn[], budget: number) =>
-    buildQwenPrompt(SYSTEM_PROMPT, history, userText, budget);
+    isOrnith
+      ? buildOrnithPrompt(SYSTEM_PROMPT, history, userText, budget)
+      : buildQwenPrompt(SYSTEM_PROMPT, history, userText, budget);
 
   /** Send one worker request; resolves on "done" with accumulated delta text. */
   function request(
@@ -405,6 +451,7 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
         });
         w.postMessage({
           type: "init",
+          engine: cfg.engine,
           ggufUrl: cfg.ggufUrl,
           tokenizerUrl: cfg.tokenizerUrl,
           engineBase: cfg.engineBase,
@@ -437,7 +484,7 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
 
   const adapter: ModelAdapter = {
     id: "local",
-    label: cfg.label ?? "Local GPU",
+    label: cfg.label ?? (isOrnith ? "Ornith 9B (local)" : "Local GPU"),
 
     async availability(): Promise<AvailabilityInfo> {
       if (!("gpu" in navigator)) {
@@ -456,13 +503,22 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
       }
       return {
         state: "downloadable",
-        detail: "~1.1 GB one-time download, cached in this browser",
+        detail: isOrnith
+          ? "~5.6 GB one-time download, cached in this browser"
+          : "~1.1 GB one-time download, cached in this browser",
       };
     },
 
     prepare: ensureReady,
 
     async route(userText, tools: AssistantTool[], history): Promise<RouteDecision> {
+      if (isOrnith) {
+        // v1: the 9B is chat-only in the panel (constrained decoding and the
+        // append-only KV machinery are QwenSession features; Ornith parity
+        // for those is tracked follow-up work).
+        const say = await generate(buildPrompt(userText, history, cfg.maxSeq - 640), 512);
+        return { tool: "chat", args: {}, say };
+      }
       const names = tools.map((t) => t.name);
       const toolLines = tools.map((t) => `- ${t.name}: ${t.description}`).join("\n");
 
@@ -573,6 +629,9 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
     },
 
     async chat(userText, history, onDelta): Promise<string> {
+      if (isOrnith) {
+        return generate(buildPrompt(userText, history, cfg.maxSeq - 640), 512, onDelta);
+      }
       return appendChat(userText, history, onDelta);
     },
 
