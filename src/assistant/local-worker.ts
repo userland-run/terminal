@@ -46,6 +46,19 @@ interface AppendMsg {
   reset?: boolean;
 }
 
+/**
+ * JSON-schema grammar-constrained generation: the reply is GUARANTEED to be a
+ * JSON document conforming to `schema` (engine L3 full grammar) — used for
+ * tool-argument filling.
+ */
+interface JsonMsg {
+  type: "json";
+  id: number;
+  prompt: string;
+  /** JSON Schema as a JSON string (engine subset: object of typed props). */
+  schema: string;
+}
+
 /** L1 checkpoint ops so the adapter can run scratch work (routing) KV-neutrally. */
 interface SnapshotMsg {
   type: "snapshot";
@@ -64,7 +77,15 @@ interface DropCkptMsg {
   ckpt: number;
 }
 
-type InMsg = InitMsg | ChatMsg | ChooseMsg | AppendMsg | SnapshotMsg | RestoreMsg | DropCkptMsg;
+type InMsg =
+  | InitMsg
+  | ChatMsg
+  | ChooseMsg
+  | JsonMsg
+  | AppendMsg
+  | SnapshotMsg
+  | RestoreMsg
+  | DropCkptMsg;
 
 interface QwenSessionLike {
   adapter(): string;
@@ -76,6 +97,7 @@ interface QwenSessionLike {
     onToken: (piece: string) => void,
   ): Promise<string>;
   generateChoice(prompt: string, choices: string[], raw: boolean): Promise<string>;
+  generateJson(prompt: string, schemaJson: string, raw: boolean): Promise<string>;
   generateAppend(text: string, steps: number, onToken: (piece: string) => void): Promise<string>;
   snapshot(): number;
   restore(id: number): void;
@@ -174,6 +196,12 @@ async function choose(msg: ChooseMsg): Promise<void> {
   post({ type: "done", id: msg.id, choice });
 }
 
+async function json(msg: JsonMsg): Promise<void> {
+  if (!session) throw new Error("session not initialized");
+  const out = await session.generateJson(msg.prompt, msg.schema, false);
+  post({ type: "done", id: msg.id, json: out });
+}
+
 async function generateAppend(msg: AppendMsg): Promise<void> {
   if (!session) throw new Error("session not initialized");
   if (msg.reset) session.reset();
@@ -211,6 +239,7 @@ self.addEventListener("message", (event: MessageEvent<InMsg>) => {
   if (msg.type === "init") void init(msg).catch(fail);
   else if (msg.type === "chat") void chat(msg).catch(fail);
   else if (msg.type === "choose") void choose(msg).catch(fail);
+  else if (msg.type === "json") void json(msg).catch(fail);
   else if (msg.type === "generateAppend") void generateAppend(msg).catch(fail);
   else if (msg.type === "snapshot") {
     try {

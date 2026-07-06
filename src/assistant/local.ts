@@ -55,6 +55,8 @@ interface WorkerEvent {
   choice?: string;
   /** Result of a "snapshot" request (L1 checkpoint id). */
   ckpt?: number;
+  /** Result of a "json" (schema-constrained) request. */
+  json?: string;
 }
 
 /** Rough token estimate for history trimming (~3.5 chars/token for code). */
@@ -330,6 +332,18 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
     });
   }
 
+  /**
+   * L3 full-grammar generation: the result is GUARANTEED to be a JSON
+   * document conforming to `schema` (engine-side byte-level masking). Used
+   * for tool-argument filling; rejects when the schema falls outside the
+   * engine's subset, in which case callers fall back to free-form JSON.
+   */
+  async function jsonOne(prompt: string, schema: object): Promise<string> {
+    const ev = await request({ type: "json", prompt, schema: JSON.stringify(schema) });
+    if (typeof ev.json !== "string") throw new Error("no json result");
+    return ev.json;
+  }
+
   /** Legacy single-shot JSON routing (fallback when forced-choice errors). */
   async function routeViaJson(
     userText: string,
@@ -474,6 +488,18 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
         const argAsk =
           `The user said: "${userText}"\nYou are calling the tool "${tool}" ` +
           `(${selected.description}). Reply with ONLY its arguments as a JSON object.`;
+        // Grammar-constrained arg fill (engine L3 full JSON schema): the
+        // result is guaranteed to parse and match the tool's inputSchema.
+        try {
+          const out = await jsonOne(
+            buildPrompt(argAsk, history, cfg.maxSeq - 512),
+            selected.inputSchema,
+          );
+          console.debug(`[assistant] local grammar args for ${tool}: ${out}`);
+          return { tool, args: JSON.parse(out) as Record<string, unknown> };
+        } catch {
+          // Schema outside the engine subset (or engine error) — free-form.
+        }
         try {
           const args = parseJson<Record<string, unknown>>(
             await generate(buildPrompt(argAsk, history, cfg.maxSeq - 512), 384),
