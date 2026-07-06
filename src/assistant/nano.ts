@@ -68,6 +68,31 @@ export function createNanoAdapter(): ModelAdapter {
     return JSON.parse(raw);
   }
 
+  /**
+   * Phase 2 of routing: fill the chosen tool's arguments under *its own*
+   * inputSchema. Nano can't do this in one shot — a generic `args:{type:"object"}`
+   * satisfies the constraint with `{}`, so `command`/`path`/… never get produced.
+   * Constraining to the tool's schema (with its `required` fields) forces them.
+   * No-arg tools (e.g. read_terminal) skip the round-trip.
+   */
+  async function fillArgs(
+    tool: AssistantTool,
+    userText: string,
+  ): Promise<Record<string, unknown>> {
+    const props = (tool.inputSchema as { properties?: Record<string, unknown> }).properties;
+    if (!props || Object.keys(props).length === 0) return {};
+    const input =
+      `The user said: "${userText}"\n` +
+      `You are calling the tool "${tool.name}" (${tool.description}). ` +
+      `Produce ONLY its arguments.`;
+    try {
+      const args = await promptJson(input, tool.inputSchema);
+      return args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+
   return {
     id: "nano",
     label: "Gemini Nano (on-device)",
@@ -91,11 +116,12 @@ export function createNanoAdapter(): ModelAdapter {
 
     async route(userText, tools): Promise<RouteDecision> {
       const names = tools.map((t) => t.name);
-      const schema = {
+      // Phase 1: pick the tool only. Args are filled in phase 2 under the tool's
+      // own schema — asking Nano for a generic `args` object here just yields `{}`.
+      const routeSchema = {
         type: "object",
         properties: {
           tool: { type: "string", enum: [...names, "chat"] },
-          args: { type: "object" },
           say: { type: "string" },
         },
         required: ["tool"],
@@ -105,12 +131,14 @@ export function createNanoAdapter(): ModelAdapter {
       const input =
         `User said: "${userText}"\n\n` +
         `Choose ONE tool to fulfil it, or "chat" to just reply.\n${toolLines}\n\n` +
-        `Return the tool name and its "args" object. For "chat", put your reply in "say".`;
+        `Return the tool name. For "chat", put your reply in "say".`;
       try {
-        const obj = (await promptJson(input, schema)) as Partial<RouteDecision>;
+        const obj = (await promptJson(input, routeSchema)) as Partial<RouteDecision>;
+        const toolName = typeof obj.tool === "string" ? obj.tool : "chat";
+        const picked = tools.find((t) => t.name === toolName);
         return {
-          tool: typeof obj.tool === "string" ? obj.tool : "chat",
-          args: (obj.args as Record<string, unknown>) ?? {},
+          tool: toolName,
+          args: picked ? await fillArgs(picked, userText) : {},
           say: typeof obj.say === "string" ? obj.say : undefined,
         };
       } catch {

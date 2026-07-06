@@ -57,6 +57,39 @@ export function createCloudAdapter(config: CloudModelConfig): ModelAdapter {
     }
   }
 
+  /**
+   * Phase 2 of routing: fill the chosen tool's arguments under *its own*
+   * inputSchema. A generic `args:{type:"object"}` in the route schema leaves the
+   * model free to emit `{}`; constraining to the tool's schema (with its
+   * `required` fields) forces the real arguments. No-arg tools skip the call.
+   */
+  async function fillArgs(
+    tool: AssistantTool,
+    userText: string,
+    history: ChatTurn[],
+  ): Promise<Record<string, unknown>> {
+    const props = (tool.inputSchema as { properties?: Record<string, unknown> }).properties;
+    if (!props || Object.keys(props).length === 0) return {};
+    const messages: ChatTurn[] = [
+      ...history,
+      {
+        role: "user",
+        content:
+          `The user said: "${userText}"\n` +
+          `You are calling the tool "${tool.name}" (${tool.description}). ` +
+          `Return ONLY its arguments as JSON.`,
+      },
+    ];
+    try {
+      const args = parseJson<Record<string, unknown>>(
+        await call({ messages, responseSchema: tool.inputSchema }),
+      );
+      return args && typeof args === "object" ? args : {};
+    } catch {
+      return {};
+    }
+  }
+
   return {
     id: "cloud",
     label,
@@ -69,11 +102,12 @@ export function createCloudAdapter(config: CloudModelConfig): ModelAdapter {
 
     async route(userText, tools, history): Promise<RouteDecision> {
       const names = tools.map((t) => t.name);
-      const schema = {
+      // Phase 1: pick the tool only; phase 2 (fillArgs) fills args under the
+      // tool's own schema so `required` fields are actually produced.
+      const routeSchema = {
         type: "object",
         properties: {
           tool: { type: "string", enum: [...names, "chat"] },
-          args: { type: "object" },
           say: { type: "string" },
         },
         required: ["tool"],
@@ -85,14 +119,16 @@ export function createCloudAdapter(config: CloudModelConfig): ModelAdapter {
           role: "user",
           content:
             `User said: "${userText}"\n\nChoose ONE tool, or "chat" to reply.\n${toolLines}\n\n` +
-            `Return JSON {tool, args, say}. Put a chat reply in "say".`,
+            `Return JSON {tool, say}. Put a chat reply in "say".`,
         },
       ];
       try {
-        const obj = parseJson<Partial<RouteDecision>>(await call({ messages, responseSchema: schema }));
+        const obj = parseJson<Partial<RouteDecision>>(await call({ messages, responseSchema: routeSchema }));
+        const toolName = typeof obj.tool === "string" ? obj.tool : "chat";
+        const picked = tools.find((t) => t.name === toolName);
         return {
-          tool: typeof obj.tool === "string" ? obj.tool : "chat",
-          args: (obj.args as Record<string, unknown>) ?? {},
+          tool: toolName,
+          args: picked ? await fillArgs(picked, userText, history) : {},
           say: typeof obj.say === "string" ? obj.say : undefined,
         };
       } catch {
