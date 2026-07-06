@@ -32,7 +32,39 @@ interface ChooseMsg {
   choices: string[];
 }
 
-type InMsg = InitMsg | ChatMsg | ChooseMsg;
+/**
+ * Append-only continuation (L1): prefill `text` (raw, caller-templated) at the
+ * current KV position and stream up to `steps` tokens. `reset` starts a fresh
+ * conversation first. Unlike "chat", the KV is retained across calls so a long
+ * conversation only ever prefills its newest turn.
+ */
+interface AppendMsg {
+  type: "generateAppend";
+  id: number;
+  text: string;
+  steps: number;
+  reset?: boolean;
+}
+
+/** L1 checkpoint ops so the adapter can run scratch work (routing) KV-neutrally. */
+interface SnapshotMsg {
+  type: "snapshot";
+  id: number;
+}
+
+interface RestoreMsg {
+  type: "restore";
+  id: number;
+  ckpt: number;
+}
+
+interface DropCkptMsg {
+  type: "dropCkpt";
+  id: number;
+  ckpt: number;
+}
+
+type InMsg = InitMsg | ChatMsg | ChooseMsg | AppendMsg | SnapshotMsg | RestoreMsg | DropCkptMsg;
 
 interface QwenSessionLike {
   adapter(): string;
@@ -44,6 +76,10 @@ interface QwenSessionLike {
     onToken: (piece: string) => void,
   ): Promise<string>;
   generateChoice(prompt: string, choices: string[], raw: boolean): Promise<string>;
+  generateAppend(text: string, steps: number, onToken: (piece: string) => void): Promise<string>;
+  snapshot(): number;
+  restore(id: number): void;
+  dropCheckpoint(id: number): void;
 }
 
 let session: QwenSessionLike | null = null;
@@ -138,6 +174,32 @@ async function choose(msg: ChooseMsg): Promise<void> {
   post({ type: "done", id: msg.id, choice });
 }
 
+async function generateAppend(msg: AppendMsg): Promise<void> {
+  if (!session) throw new Error("session not initialized");
+  if (msg.reset) session.reset();
+  const stats = await session.generateAppend(msg.text, msg.steps, (piece) => {
+    post({ type: "delta", id: msg.id, text: piece });
+  });
+  post({ type: "done", id: msg.id, stats: JSON.parse(stats) as Record<string, number> });
+}
+
+function snapshot(msg: SnapshotMsg): void {
+  if (!session) throw new Error("session not initialized");
+  post({ type: "done", id: msg.id, ckpt: session.snapshot() });
+}
+
+function restore(msg: RestoreMsg): void {
+  if (!session) throw new Error("session not initialized");
+  session.restore(msg.ckpt);
+  post({ type: "done", id: msg.id });
+}
+
+function dropCkpt(msg: DropCkptMsg): void {
+  if (!session) throw new Error("session not initialized");
+  session.dropCheckpoint(msg.ckpt);
+  post({ type: "done", id: msg.id });
+}
+
 self.addEventListener("message", (event: MessageEvent<InMsg>) => {
   const msg = event.data;
   const fail = (e: unknown) =>
@@ -149,4 +211,24 @@ self.addEventListener("message", (event: MessageEvent<InMsg>) => {
   if (msg.type === "init") void init(msg).catch(fail);
   else if (msg.type === "chat") void chat(msg).catch(fail);
   else if (msg.type === "choose") void choose(msg).catch(fail);
+  else if (msg.type === "generateAppend") void generateAppend(msg).catch(fail);
+  else if (msg.type === "snapshot") {
+    try {
+      snapshot(msg);
+    } catch (e) {
+      fail(e);
+    }
+  } else if (msg.type === "restore") {
+    try {
+      restore(msg);
+    } catch (e) {
+      fail(e);
+    }
+  } else if (msg.type === "dropCkpt") {
+    try {
+      dropCkpt(msg);
+    } catch (e) {
+      fail(e);
+    }
+  }
 });

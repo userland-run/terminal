@@ -53,6 +53,8 @@ interface WorkerEvent {
   stats?: Record<string, number>;
   /** Result of a "choose" (L3 forced-choice) request. */
   choice?: string;
+  /** Result of a "snapshot" request (L1 checkpoint id). */
+  ckpt?: number;
 }
 
 /** Rough token estimate for history trimming (~3.5 chars/token for code). */
@@ -115,6 +117,19 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
   let nextId = 1;
   let lastUsage: { used: number; quota: number } | null = null;
 
+  // --- Append-only conversation KV (spec §4.1 L1) ---
+  // The engine retains the KV across turns, so a continuing conversation only
+  // prefills its NEWEST turn (never the history). `kvTurns` is the turn list
+  // the KV currently represents (system prompt implied); null = no live
+  // conversation in the KV. Between turns the KV sits mid-assistant-turn (no
+  // closing <|im_end|>), so every appended delta starts by closing it.
+  let kvTurns: ChatTurn[] | null = null;
+  let kvPos = 0;
+  // >0 while routing runs inside a snapshot/restore window: one-shot "chat"
+  // generations in that window reset the KV but the checkpoint restores it,
+  // so they must not invalidate `kvTurns`.
+  let kvProtected = 0;
+
   const handlers = new Map<number, (ev: WorkerEvent) => void>();
 
   function spawn(): Worker {
@@ -132,7 +147,11 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
   const buildPrompt = (userText: string, history: ChatTurn[], budget: number) =>
     buildQwenPrompt(SYSTEM_PROMPT, history, userText, budget);
 
-  function generate(prompt: string, steps: number, onDelta?: (d: string) => void): Promise<string> {
+  /** Send one worker request; resolves on "done" with accumulated delta text. */
+  function request(
+    msg: Record<string, unknown>,
+    onDelta?: (d: string) => void,
+  ): Promise<WorkerEvent & { text: string }> {
     const w = spawn();
     const id = nextId++;
     inFlight++;
@@ -145,20 +164,145 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
         } else if (ev.type === "done") {
           handlers.delete(id);
           inFlight--;
-          const s = ev.stats ?? {};
-          lastUsage = {
-            used: (s.prefill_tokens ?? 0) + (s.generated ?? 0),
-            quota: cfg.maxSeq,
-          };
-          resolve(text);
+          resolve({ ...ev, text });
         } else if (ev.type === "error") {
           handlers.delete(id);
           inFlight--;
           reject(new Error(ev.message ?? "local model error"));
         }
       });
-      w.postMessage({ type: "chat", id, prompt, steps });
+      w.postMessage({ ...msg, id });
     });
+  }
+
+  async function generate(
+    prompt: string,
+    steps: number,
+    onDelta?: (d: string) => void,
+  ): Promise<string> {
+    // A one-shot generation resets the session KV; outside a snapshot window
+    // that kills any live append-only conversation.
+    if (kvProtected === 0) kvTurns = null;
+    const ev = await request({ type: "chat", prompt, steps }, onDelta);
+    const s = ev.stats ?? {};
+    lastUsage = {
+      used: (s.prefill_tokens ?? 0) + (s.generated ?? 0),
+      quota: cfg.maxSeq,
+    };
+    return ev.text;
+  }
+
+  // --- Append-only chat path ---
+
+  const sysBlock = () => `<|im_start|>system\n${SYSTEM_PROMPT}<|im_end|>\n`;
+  /** A turn appended onto a KV that sits mid-assistant-turn. */
+  const midTurn = (role: string, content: string) =>
+    `<|im_end|>\n<|im_start|>${role}\n${content}`;
+
+  const isPrefix = (prefix: ChatTurn[], full: ChatTurn[]) =>
+    prefix.length <= full.length &&
+    prefix.every((t, i) => full[i]!.role === t.role && full[i]!.content === t.content);
+
+  /** Most recent history turns that fit `budget` estimated tokens. */
+  function trimHistory(history: ChatTurn[], budget: number): ChatTurn[] {
+    let used = 0;
+    let start = history.length;
+    while (start > 0 && used + estimateTokens(history[start - 1]!.content) + 8 <= budget) {
+      used += estimateTokens(history[start - 1]!.content) + 8;
+      start--;
+    }
+    return history.slice(start);
+  }
+
+  /**
+   * Streamed chat that keeps the conversation KV across turns. If the KV holds
+   * a prefix of `history`, only the missing turns (e.g. a routed tool turn's
+   * user text + canned reply) and the new user turn are prefilled — the L1
+   * append-only win. Otherwise (first turn, adapter switch, KV clobbered by a
+   * raw generation, or near-capacity KV) the conversation is rebuilt once from
+   * trimmed history and appends from there.
+   */
+  async function appendChat(
+    userText: string,
+    history: ChatTurn[],
+    onDelta?: (d: string) => void,
+  ): Promise<string> {
+    const steps = 512;
+    if (kvTurns && isPrefix(kvTurns, history)) {
+      let delta = "";
+      for (const t of history.slice(kvTurns.length)) delta += midTurn(t.role, t.content);
+      delta += `${midTurn("user", userText)}<|im_end|>\n<|im_start|>assistant\n`;
+      if (kvPos + estimateTokens(delta) + steps + 64 <= cfg.maxSeq) {
+        try {
+          return await runAppend(delta, false, userText, history, steps, onDelta);
+        } catch {
+          kvTurns = null; // fall through to a fresh rebuild
+        }
+      } else {
+        kvTurns = null; // near capacity — rebuild from trimmed history
+      }
+    }
+
+    const trimmed = trimHistory(
+      history,
+      cfg.maxSeq - steps - 256 - estimateTokens(userText),
+    );
+    let text = sysBlock();
+    for (const t of trimmed) text += `<|im_start|>${t.role}\n${t.content}<|im_end|>\n`;
+    text += `<|im_start|>user\n${userText}<|im_end|>\n<|im_start|>assistant\n`;
+    return runAppend(text, true, userText, trimmed, steps, onDelta);
+  }
+
+  async function runAppend(
+    text: string,
+    reset: boolean,
+    userText: string,
+    baseTurns: ChatTurn[],
+    steps: number,
+    onDelta?: (d: string) => void,
+  ): Promise<string> {
+    const ev = await request({ type: "generateAppend", text, steps, reset }, onDelta);
+    const s = ev.stats ?? {};
+    console.debug(
+      `[assistant] local kv ${reset ? "rebuild" : "append"}: prefill ${s.prefill_tokens} tok, ` +
+        `kv_pos ${kvPos} -> ${s.kv_pos}`,
+    );
+    kvPos = s.kv_pos ?? 0;
+    lastUsage = { used: kvPos, quota: cfg.maxSeq };
+    kvTurns = [
+      ...baseTurns,
+      { role: "user", content: userText },
+      { role: "assistant", content: ev.text },
+    ];
+    return ev.text;
+  }
+
+  /**
+   * Run `work` (routing prompts, arg-fill — anything that clobbers the KV)
+   * inside an L1 snapshot/restore window so a live conversation KV survives.
+   * Snapshot and restore are sub-millisecond GPU-GPU copies.
+   */
+  async function kvNeutral<T>(work: () => Promise<T>): Promise<T> {
+    if (kvTurns === null) return work();
+    let ckpt: number | undefined;
+    try {
+      ckpt = (await request({ type: "snapshot" })).ckpt;
+    } catch {
+      kvTurns = null; // can't protect the KV — treat conversation as lost
+      return work();
+    }
+    kvProtected++;
+    try {
+      return await work();
+    } finally {
+      kvProtected--;
+      try {
+        await request({ type: "restore", ckpt });
+        await request({ type: "dropCkpt", ckpt });
+      } catch {
+        kvTurns = null; // restore failed — conversation KV is gone
+      }
+    }
   }
 
   /**
@@ -293,49 +437,59 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
       const names = tools.map((t) => t.name);
       const toolLines = tools.map((t) => `- ${t.name}: ${t.description}`).join("\n");
 
-      // Phase 1: pick the tool under an L3 forced-choice mask, so the result is
-      // GUARANTEED to be a real tool name (or "chat") — no JSON parsing, no
-      // invalid-tool fallback. Falls back to the JSON path if masking errors
-      // (e.g. a tool name that doesn't tokenize cleanly).
-      const choicePrompt = buildPrompt(
-        `Available tools:\n${toolLines}\n\nThe user said: "${userText}"\n` +
-          `Which single tool best handles this? Answer "chat" for a plain reply.`,
-        history,
-        cfg.maxSeq - 256,
-      );
-      let tool: string;
-      try {
-        tool = await chooseOne(choicePrompt, [...names, "chat"]);
-      } catch {
-        return routeViaJson(userText, tools, history);
-      }
-
-      if (tool === "chat" || !names.includes(tool)) {
-        const say = await generate(
-          buildPrompt(userText, history, cfg.maxSeq - 640),
-          512,
+      // Routing prompts clobber the KV, so the whole decision runs inside an
+      // L1 snapshot/restore window (kvNeutral) — a live append-only
+      // conversation survives untouched. The chat reply itself happens AFTER
+      // the window, through the append path.
+      const decision = await kvNeutral(async (): Promise<RouteDecision> => {
+        // Phase 1: pick the tool under an L3 forced-choice mask, so the result
+        // is GUARANTEED to be a real tool name (or "chat") — no JSON parsing,
+        // no invalid-tool fallback. Falls back to the JSON path if masking
+        // errors (e.g. a tool name that doesn't tokenize cleanly).
+        const choicePrompt = buildPrompt(
+          `Available tools:\n${toolLines}\n\nThe user said: "${userText}"\n` +
+            `Which single tool best handles this? Answer "chat" for a plain reply.`,
+          history,
+          cfg.maxSeq - 256,
         );
+        let tool: string;
+        try {
+          tool = await chooseOne(choicePrompt, [...names, "chat"]);
+        } catch {
+          return routeViaJson(userText, tools, history);
+        }
+
+        if (tool === "chat" || !names.includes(tool)) {
+          return { tool: "chat", args: {} };
+        }
+
+        // Phase 2: fill the chosen tool's arguments (free-form JSON under its
+        // own schema); a no-arg tool skips the call.
+        const selected = tools.find((t) => t.name === tool)!;
+        const props = (selected.inputSchema as { properties?: Record<string, unknown> })
+          .properties;
+        if (!props || Object.keys(props).length === 0) {
+          return { tool, args: {} };
+        }
+        const argAsk =
+          `The user said: "${userText}"\nYou are calling the tool "${tool}" ` +
+          `(${selected.description}). Reply with ONLY its arguments as a JSON object.`;
+        try {
+          const args = parseJson<Record<string, unknown>>(
+            await generate(buildPrompt(argAsk, history, cfg.maxSeq - 512), 384),
+          );
+          return { tool, args: args && typeof args === "object" ? args : {} };
+        } catch {
+          return { tool, args: {} };
+        }
+      });
+
+      if (decision.tool === "chat" && decision.say === undefined) {
+        // Plain reply through the append-only conversation KV.
+        const say = await appendChat(userText, history);
         return { tool: "chat", args: {}, say };
       }
-
-      // Phase 2: fill the chosen tool's arguments (free-form JSON under its own
-      // schema); a no-arg tool skips the call.
-      const selected = tools.find((t) => t.name === tool)!;
-      const props = (selected.inputSchema as { properties?: Record<string, unknown> }).properties;
-      if (!props || Object.keys(props).length === 0) {
-        return { tool, args: {} };
-      }
-      const argAsk =
-        `The user said: "${userText}"\nYou are calling the tool "${tool}" ` +
-        `(${selected.description}). Reply with ONLY its arguments as a JSON object.`;
-      try {
-        const args = parseJson<Record<string, unknown>>(
-          await generate(buildPrompt(argAsk, history, cfg.maxSeq - 512), 384),
-        );
-        return { tool, args: args && typeof args === "object" ? args : {} };
-      } catch {
-        return { tool, args: {} };
-      }
+      return decision;
     },
 
     async generateProject(spec, opts): Promise<GeneratedProject> {
@@ -358,8 +512,7 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
     },
 
     async chat(userText, history, onDelta): Promise<string> {
-      const prompt = buildPrompt(userText, history, cfg.maxSeq - 640);
-      return generate(prompt, 512, onDelta);
+      return appendChat(userText, history, onDelta);
     },
 
     usage(): { used: number; quota: number } | null {
@@ -371,6 +524,9 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
       worker = null;
       ready = false;
       inFlight = 0;
+      kvTurns = null;
+      kvPos = 0;
+      kvProtected = 0;
       handlers.clear();
     },
   };
