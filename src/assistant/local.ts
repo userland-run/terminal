@@ -108,6 +108,10 @@ export interface LocalModel {
   ensureReady(onProgress?: (fraction: number) => void): Promise<void>;
   /** Stream a completion for a fully-templated raw prompt. */
   rawGenerate(prompt: string, steps: number, onDelta?: (delta: string) => void): Promise<string>;
+  /** Forced choice over a fully-templated raw prompt (guaranteed-valid pick). */
+  rawChoose(prompt: string, choices: string[]): Promise<string>;
+  /** Schema-constrained JSON for a fully-templated raw prompt (guaranteed to parse + conform). */
+  rawJson(prompt: string, schema: object): Promise<string>;
 }
 
 export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
@@ -312,7 +316,8 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
    * sampler to the tokenized options, so the result is guaranteed valid). Used
    * for reliable tool routing — no JSON parsing, no invalid-tool fallback.
    */
-  function chooseOne(prompt: string, choices: string[]): Promise<string> {
+  function chooseOne(prompt: string, choices: string[], raw = false): Promise<string> {
+    if (kvProtected === 0) kvTurns = null; // constrained decode resets the KV
     const w = spawn();
     const id = nextId++;
     inFlight++;
@@ -328,7 +333,7 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
           reject(new Error(ev.message ?? "local model choose error"));
         }
       });
-      w.postMessage({ type: "choose", id, prompt, choices });
+      w.postMessage({ type: "choose", id, prompt, choices, raw });
     });
   }
 
@@ -338,8 +343,9 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
    * for tool-argument filling; rejects when the schema falls outside the
    * engine's subset, in which case callers fall back to free-form JSON.
    */
-  async function jsonOne(prompt: string, schema: object): Promise<string> {
-    const ev = await request({ type: "json", prompt, schema: JSON.stringify(schema) });
+  async function jsonOne(prompt: string, schema: object, raw = false): Promise<string> {
+    if (kvProtected === 0) kvTurns = null; // constrained decode resets the KV
+    const ev = await request({ type: "json", prompt, schema: JSON.stringify(schema), raw });
     if (typeof ev.json !== "string") throw new Error("no json result");
     return ev.json;
   }
@@ -564,6 +570,8 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
     isBusy: () => inFlight > 0,
     ensureReady,
     rawGenerate: generate,
+    rawChoose: (prompt, choices) => chooseOne(prompt, choices, true),
+    rawJson: (prompt, schema) => jsonOne(prompt, schema, true),
   };
 }
 

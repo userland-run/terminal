@@ -30,6 +30,8 @@ interface ChooseMsg {
   id: number;
   prompt: string;
   choices: string[];
+  /** True when `prompt` is already fully templated (no chat wrapper). */
+  raw?: boolean;
 }
 
 /**
@@ -57,6 +59,8 @@ interface JsonMsg {
   prompt: string;
   /** JSON Schema as a JSON string (engine subset: object of typed props). */
   schema: string;
+  /** True when `prompt` is already fully templated (no chat wrapper). */
+  raw?: boolean;
 }
 
 /** L1 checkpoint ops so the adapter can run scratch work (routing) KV-neutrally. */
@@ -192,13 +196,13 @@ async function chat(msg: ChatMsg): Promise<void> {
 
 async function choose(msg: ChooseMsg): Promise<void> {
   if (!session) throw new Error("session not initialized");
-  const choice = await session.generateChoice(msg.prompt, msg.choices, false);
+  const choice = await session.generateChoice(msg.prompt, msg.choices, !!msg.raw);
   post({ type: "done", id: msg.id, choice });
 }
 
 async function json(msg: JsonMsg): Promise<void> {
   if (!session) throw new Error("session not initialized");
-  const out = await session.generateJson(msg.prompt, msg.schema, false);
+  const out = await session.generateJson(msg.prompt, msg.schema, !!msg.raw);
   post({ type: "done", id: msg.id, json: out });
 }
 
