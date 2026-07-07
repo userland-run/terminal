@@ -8,12 +8,15 @@
 // user's GPU in a dedicated worker, next to (not inside) the VM.
 
 import type {
+  AgentMessage,
+  AgentTurn,
   AssistantTool,
   AvailabilityInfo,
   ChatTurn,
   GeneratedProject,
   ModelAdapter,
   RouteDecision,
+  TurnMetrics,
 } from "./types";
 
 export interface LocalModelConfig {
@@ -87,6 +90,192 @@ const SYSTEM_PROMPT =
   "You are the assistant inside a browser terminal that runs a real Linux/Node.js " +
   "userland (a RISC-V emulator). You drive the terminal by choosing tools and you " +
   "write real, runnable code that is executed inside the sandbox. Be concise.";
+
+// --- Ornith-1 native agentic path (§ "how the model was trained") -----------
+// Ornith-1 is a reasoning + native-`<tool_call>` agentic model. Unlike the
+// forced-choice router, the agentic path lets it OPEN a `<think>` block, reason,
+// then emit a Qwen3-style `<tool_call>` XML block; the orchestrator feeds each
+// tool result back as a `<tool_response>` turn and re-enters generation.
+
+/** The Ornith-1 recommended agentic sampling profile (from the model card). */
+export const ORNITH_AGENT_SAMPLING = { temperature: 0.6, topP: 0.95, topK: 20 };
+
+const ORNITH_AGENT_SYSTEM_BASE =
+  "You are a coding agent operating a real Linux/Node.js userland (a RISC-V " +
+  "emulator) inside a browser terminal. You accomplish tasks ONLY by calling " +
+  "tools — never write code, file contents, or command output directly in your " +
+  "reply. Think briefly in <think>…</think>, then emit exactly ONE <tool_call> " +
+  "and stop; you will receive its <tool_response> and continue. File contents " +
+  "and code MUST go in the write_file tool's `content` argument, never in prose. " +
+  "When every step is finished, reply with a one-line plain-text summary and no " +
+  "tool call.";
+
+/** Qwen3-style system block: the base prompt, a `<tools>` schema list, and a
+ *  worked example — few-shot format priming lifts a 9B's tool-call adherence
+ *  far more than instructions alone. */
+function ornithToolsSystem(tools: AssistantTool[]): string {
+  const defs = tools
+    .map((t) =>
+      JSON.stringify({
+        type: "function",
+        function: { name: t.name, description: t.description, parameters: t.inputSchema },
+      }),
+    )
+    .join("\n");
+  const example =
+    "Example — creating a file looks EXACTLY like this:\n" +
+    "<tool_call>\n" +
+    '{"name": "write_file", "arguments": {"path": "/app/hello.js", "content": "console.log(\\"hi\\")\\n"}}\n' +
+    "</tool_call>";
+  return (
+    `${ORNITH_AGENT_SYSTEM_BASE}\n\n# Tools\n\n` +
+    "Emit a call as one block (and nothing else after it):\n" +
+    '<tool_call>\n{"name": <function-name>, "arguments": <arguments-object>}\n</tool_call>\n\n' +
+    `Available functions (JSON schemas inside <tools>):\n<tools>\n${defs}\n</tools>\n\n${example}`
+  );
+}
+
+/** Build the full ChatML prompt for one agentic step; the assistant cue is left
+ *  OPEN so the model emits its own `<think>` reasoning before acting. */
+function buildOrnithAgentPrompt(tools: AssistantTool[], transcript: AgentMessage[]): string {
+  let s = `<|im_start|>system\n${ornithToolsSystem(tools)}<|im_end|>\n`;
+  for (const m of transcript) {
+    if (m.role === "tool") {
+      s += `<|im_start|>user\n<tool_response>\n${m.content}\n</tool_response><|im_end|>\n`;
+    } else {
+      s += `<|im_start|>${m.role}\n${m.content}<|im_end|>\n`;
+    }
+  }
+  return s + "<|im_start|>assistant\n"; // open <think>
+}
+
+/** Parse a `{ … }` object from the first brace, matching to its close AND
+ *  tolerating raw control characters inside string values — small models often
+ *  emit unescaped newlines/tabs in a file's `content`, which strict JSON.parse
+ *  rejects. Returns null if no balanced object parses. */
+function parseLooseJsonObject(s: string): Record<string, unknown> | null {
+  const start = s.indexOf("{");
+  if (start < 0) return null;
+  let out = "";
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i]!;
+    if (inStr) {
+      if (esc) {
+        out += c;
+        esc = false;
+      } else if (c === "\\") {
+        out += c;
+        esc = true;
+      } else if (c === '"') {
+        out += c;
+        inStr = false;
+      } else if (c === "\n") out += "\\n";
+      else if (c === "\r") out += "\\r";
+      else if (c === "\t") out += "\\t";
+      else out += c;
+    } else {
+      out += c;
+      if (c === '"') inStr = true;
+      else if (c === "{") depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            return JSON.parse(out) as Record<string, unknown>;
+          } catch {
+            return null;
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** Find a tool-call object `{"name": …, "arguments": …}` anywhere in `region`,
+ *  with OR without a `<tool_call>` wrapper (Ornith emits both). */
+function findToolCallObject(region: string): Record<string, unknown> | null {
+  const at = region.search(/\{\s*"name"\s*:/);
+  return at < 0 ? null : parseLooseJsonObject(region.slice(at));
+}
+
+/** Split one assistant generation into reasoning + (a tool call | a final answer). */
+export function parseOrnithAgentTurn(raw: string): AgentTurn {
+  const thinkM = raw.match(/<think>([\s\S]*?)<\/think>/);
+  const reasoning = thinkM ? thinkM[1]!.trim() : undefined;
+  const closeThink = raw.indexOf("</think>");
+  const rest = closeThink >= 0 ? raw.slice(closeThink + "</think>".length) : raw;
+  const obj = findToolCallObject(rest);
+  if (obj && typeof obj.name === "string") {
+    const args = (obj.arguments ?? obj.args ?? {}) as Record<string, unknown>;
+    return { reasoning, toolCall: { name: obj.name as string, args }, raw };
+  }
+  const answer = rest
+    .replace(/<\/?think>/g, "")
+    .replace(/<\/?tool_call>/g, "")
+    .trim();
+  return { reasoning, answer: answer || "(done)", raw };
+}
+
+/** Streaming filter that classifies the live token stream so the UI can render
+ *  it as a modern agent transcript: everything up to `</think>` is "reasoning";
+ *  after it is the plain "answer"; the `<tool_call>` JSON is suppressed (it's
+ *  shown as a tool card, never dumped as text). `<think>`/`</think>` tags are
+ *  stripped. A short tail is held back so a partial tag never leaks. */
+function makeVisibleStreamer(
+  onVisible?: (kind: "reasoning" | "answer", text: string) => void,
+  initialPhase: "reasoning" | "answer" = "reasoning",
+): (piece: string) => void {
+  const HOLD = 12;
+  let buf = "";
+  let cursor = 0; // chars of `buf` already forwarded
+  let phase: "reasoning" | "answer" = initialPhase;
+  let stopped = false;
+
+  const emitReasoning = (s: string) => {
+    const t = s.replace(/<\/?think>/g, "");
+    if (t && onVisible) onVisible("reasoning", t);
+  };
+  const emitAnswer = (s: string) => {
+    if (s && onVisible) onVisible("answer", s);
+  };
+
+  const feed = (upto: number) => {
+    while (cursor < upto) {
+      if (phase === "reasoning") {
+        const close = buf.indexOf("</think>", cursor);
+        if (close >= 0 && close + 8 <= upto) {
+          emitReasoning(buf.slice(cursor, close));
+          cursor = close + 8; // consume "</think>"
+          phase = "answer";
+          continue;
+        }
+        emitReasoning(buf.slice(cursor, upto));
+        cursor = upto;
+      } else {
+        emitAnswer(buf.slice(cursor, upto));
+        cursor = upto;
+      }
+    }
+  };
+
+  return (piece: string) => {
+    if (stopped) return;
+    buf += piece;
+    const tc = buf.indexOf("<tool_call>");
+    const nameM = buf.search(/\{\s*"name"\s*:/); // a bare (untagged) tool-call JSON
+    const cut = Math.min(tc < 0 ? Infinity : tc, nameM < 0 ? Infinity : nameM);
+    if (cut !== Infinity) {
+      feed(cut); // flush prose before the call, then suppress the JSON body
+      stopped = true;
+      return;
+    }
+    feed(Math.max(cursor, buf.length - HOLD));
+  };
+}
 
 interface WorkerEvent {
   type: "progress" | "ready" | "delta" | "done" | "error";
@@ -175,6 +364,7 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
   let inFlight = 0;
   let nextId = 1;
   let lastUsage: { used: number; quota: number } | null = null;
+  let agentSeed = 0; // varies the sampler seed per agentic step
 
   // --- Append-only conversation KV (spec §4.1 L1) ---
   // The engine retains the KV across turns, so a continuing conversation only
@@ -208,23 +398,44 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
       ? buildOrnithPrompt(SYSTEM_PROMPT, history, userText, budget)
       : buildQwenPrompt(SYSTEM_PROMPT, history, userText, budget);
 
-  /** Send one worker request; resolves on "done" with accumulated delta text. */
+  /** Send one worker request; resolves on "done" with accumulated delta text.
+   *  When `onMetrics` is set, reports live tok/s (one delta == one token) and a
+   *  precise final rate from the engine's `done` stats. */
   function request(
     msg: Record<string, unknown>,
     onDelta?: (d: string) => void,
+    onMetrics?: (m: TurnMetrics) => void,
   ): Promise<WorkerEvent & { text: string }> {
     const w = spawn();
     const id = nextId++;
     inFlight++;
+    const t0 = performance.now();
+    let gen = 0;
     return new Promise((resolve, reject) => {
       let text = "";
       handlers.set(id, (ev) => {
         if (ev.type === "delta") {
           text += ev.text ?? "";
           onDelta?.(ev.text ?? "");
+          if (onMetrics) {
+            gen += 1; // the worker posts exactly one delta per generated token
+            const elapsedMs = performance.now() - t0;
+            onMetrics({ tokens: gen, elapsedMs, tokPerSec: gen / (elapsedMs / 1000 || 1) });
+          }
         } else if (ev.type === "done") {
           handlers.delete(id);
           inFlight--;
+          if (onMetrics) {
+            const s = ev.stats ?? {};
+            const elapsedMs = performance.now() - t0;
+            const tokens = s.generated ?? gen;
+            onMetrics({
+              tokens,
+              elapsedMs,
+              tokPerSec: tokens / (elapsedMs / 1000 || 1),
+              prefillTokens: s.prefill_tokens,
+            });
+          }
           resolve({ ...ev, text });
         } else if (ev.type === "error") {
           handlers.delete(id);
@@ -292,6 +503,7 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
     userText: string,
     history: ChatTurn[],
     onDelta?: (d: string) => void,
+    onMetrics?: (m: TurnMetrics) => void,
   ): Promise<string> {
     const steps = 512;
     if (kvTurns && isPrefix(kvTurns, history)) {
@@ -300,7 +512,7 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
       delta += `${midTurn("user", userText)}<|im_end|>\n${assistantCue}`;
       if (kvPos + estimateTokens(delta) + steps + 64 <= cfg.maxSeq) {
         try {
-          return await runAppend(delta, false, userText, history, steps, onDelta);
+          return await runAppend(delta, false, userText, history, steps, onDelta, onMetrics);
         } catch {
           kvTurns = null; // fall through to a fresh rebuild
         }
@@ -316,7 +528,7 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
     let text = sysBlock();
     for (const t of trimmed) text += `<|im_start|>${t.role}\n${t.content}<|im_end|>\n`;
     text += `<|im_start|>user\n${userText}<|im_end|>\n${assistantCue}`;
-    return runAppend(text, true, userText, trimmed, steps, onDelta);
+    return runAppend(text, true, userText, trimmed, steps, onDelta, onMetrics);
   }
 
   async function runAppend(
@@ -326,8 +538,9 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
     baseTurns: ChatTurn[],
     steps: number,
     onDelta?: (d: string) => void,
+    onMetrics?: (m: TurnMetrics) => void,
   ): Promise<string> {
-    const ev = await request({ type: "generateAppend", text, steps, reset }, onDelta);
+    const ev = await request({ type: "generateAppend", text, steps, reset }, onDelta, onMetrics);
     const s = ev.stats ?? {};
     console.debug(
       `[assistant] local kv ${reset ? "rebuild" : "append"}: prefill ${s.prefill_tokens} tok, ` +
@@ -599,11 +812,9 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
         }
       });
 
-      if (decision.tool === "chat" && decision.say === undefined) {
-        // Plain reply through the append-only conversation KV.
-        const say = await appendChat(userText, history);
-        return { tool: "chat", args: {}, say };
-      }
+      // A "chat" decision returns WITHOUT a pre-generated reply, so the
+      // orchestrator streams it through chat() (the append-only KV path) with
+      // live tok/s — rather than blocking here for the whole reply.
       return decision;
     },
 
@@ -626,9 +837,168 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
       }
     },
 
-    async chat(userText, history, onDelta): Promise<string> {
-      return appendChat(userText, history, onDelta);
+    // `signal` is accepted for interface parity but the worker generation isn't
+    // abortable mid-flight; the panel freezes the UI on Stop and lets the KV
+    // finish so the next turn's append-only prefix stays consistent.
+    async chat(userText, history, onDelta, onMetrics): Promise<string> {
+      return appendChat(userText, history, onDelta, onMetrics);
     },
+
+    // Native agentic step — only Ornith is trained for `<tool_call>` + `<think>`;
+    // left undefined on the Qwen bring-up model so the orchestrator keeps using
+    // the forced-choice router there.
+    agentStep: isOrnith
+      ? async (
+          transcript: AgentMessage[],
+          tools: AssistantTool[],
+          onVisible?: (kind: "reasoning" | "answer", text: string) => void,
+          onMetrics?: (m: TurnMetrics) => void,
+        ): Promise<AgentTurn> => {
+          const clip = (str: string, n: number) => (str.length > n ? str.slice(0, n) + "…" : str);
+          // Compact transcript context shared by the constrained-decode stages.
+          const ctx = transcript
+            .map((m) =>
+              m.role === "user"
+                ? `USER: ${m.content}`
+                : m.role === "tool"
+                  ? `RESULT of ${m.name}: ${clip(m.content, 220)}`
+                  : `ASSISTANT: ${clip(m.content, 160)}`,
+            )
+            .join("\n");
+          agentSeed = (agentSeed + 1) & 0xffff;
+          kvTurns = null;
+
+          // 1) REASON in an open <think> block (streamed live), capped so the
+          //    model can't ramble indefinitely.
+          const reasonPrompt = buildOrnithAgentPrompt(tools, transcript);
+          const rBudget = cfg.maxSeq - estimateTokens(reasonPrompt) - 96;
+          const reasonCap = Math.max(64, Math.min(240, rBudget));
+          const r1 = await request(
+            {
+              type: "generateAppend",
+              text: reasonPrompt,
+              steps: reasonCap,
+              reset: true,
+              temperature: ORNITH_AGENT_SAMPLING.temperature,
+              topP: ORNITH_AGENT_SAMPLING.topP,
+              topK: ORNITH_AGENT_SAMPLING.topK,
+              seed: agentSeed + 1,
+            },
+            makeVisibleStreamer(onVisible, "reasoning"),
+            onMetrics,
+          );
+          const reasoning = (r1.text.match(/<think>([\s\S]*)/)?.[1] ?? r1.text)
+            .replace(/<\/?think>/g, "")
+            .trim();
+          lastUsage = { used: (r1.stats?.kv_pos as number) ?? 0, quota: cfg.maxSeq };
+
+          // 2) CHOOSE the next tool (or finish) via engine forced-choice — the
+          //    result is GUARANTEED to be a real tool name or "reply".
+          const names = tools.map((t) => t.name);
+          const toolLines = tools.map((t) => `- ${t.name}: ${t.description}`).join("\n");
+          // Only allow "reply" (finish) once at least one tool has actually run —
+          // otherwise a 9B tends to narrate its intent instead of acting. This
+          // forces the first step to make a real tool call.
+          const canReply = transcript.some((m) => m.role === "tool");
+          const options = canReply ? [...names, "reply"] : names;
+          const choicePrompt = buildPrompt(
+            `${ctx}\n\nMy reasoning:\n${clip(reasoning, 500)}\n\nTools:\n${toolLines}\n\n` +
+              `The RESULT lines above are tools that ALREADY ran — do NOT repeat them ` +
+              `(never re-read or re-write a file that already succeeded). Pick the SINGLE ` +
+              `next tool that makes NEW progress toward the goal.` +
+              (canReply ? ` Choose "reply" once every step of the task is done.` : ""),
+            [],
+            cfg.maxSeq - 320,
+          );
+          const choice = await chooseOne(choicePrompt, options, true);
+
+          if (!names.includes(choice)) {
+            // 3a) Finished — stream a short natural-language summary.
+            const ansPrompt = buildPrompt(
+              `${ctx}\n\nThe task is complete. Give the user a one-line summary of what was done.`,
+              [],
+              cfg.maxSeq - 200,
+            );
+            const answer = (await generate(ansPrompt, 160, (d) => onVisible?.("answer", d))).trim();
+            return { reasoning, answer: answer || "Done.", raw: r1.text };
+          }
+
+          const tool = tools.find((t) => t.name === choice)!;
+
+          // 3b-i) write_file specially: its `content` is long code, and greedy
+          //   grammar arg-fill emits an EMPTY string for it. So grammar-fill the
+          //   short `path`, generate `content` with SAMPLED free-form decode
+          //   (which produces real code), and build the args ourselves so JSON
+          //   escaping is correct.
+          if (choice === "write_file") {
+            let path = "";
+            try {
+              const pj = JSON.parse(
+                await jsonOne(
+                  buildPrompt(
+                    `${ctx}\n\nMy reasoning:\n${clip(reasoning, 400)}\n\nWhich file path is written next?`,
+                    [],
+                    cfg.maxSeq - 300,
+                  ),
+                  { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+                  true,
+                ),
+              ) as { path?: string };
+              if (typeof pj.path === "string") path = pj.path.trim();
+            } catch {
+              /* fall back to a path parsed from context */
+            }
+            if (!path) path = (ctx.match(/\/[\w./-]+\.\w+/) ?? ["/app/index.js"])[0];
+
+            agentSeed = (agentSeed + 5) & 0xffff;
+            const contentPrompt = buildPrompt(
+              `${ctx}\n\nMy reasoning:\n${clip(reasoning, 400)}\n\n` +
+                `Write the COMPLETE, runnable contents of the file ${path}. ` +
+                `Output ONLY the raw file contents — no explanation, no markdown code fences.`,
+              [],
+              cfg.maxSeq - 400,
+            );
+            const cev = await request(
+              {
+                type: "generateAppend",
+                text: contentPrompt,
+                steps: 1000,
+                reset: true,
+                temperature: ORNITH_AGENT_SAMPLING.temperature,
+                topP: ORNITH_AGENT_SAMPLING.topP,
+                topK: ORNITH_AGENT_SAMPLING.topK,
+                seed: agentSeed + 1,
+              },
+              undefined, // don't stream the file body into the chat
+              onMetrics,
+            );
+            const content = cev.text
+              .trim()
+              .replace(/^```[\w-]*\n?/, "")
+              .replace(/\n?```\s*$/, "");
+            return { reasoning, toolCall: { name: "write_file", args: { path, content } }, raw: r1.text };
+          }
+
+          // 3b-ii) other tools have short args — grammar arg-fill is reliable and
+          //   guarantees valid, schema-conforming JSON.
+          const argPrompt = buildPrompt(
+            `${ctx}\n\nMy reasoning:\n${clip(reasoning, 500)}\n\n` +
+              `Provide the arguments for the tool "${choice}" (${tool.description}) for the next step.`,
+            [],
+            cfg.maxSeq - 700,
+          );
+          let args: Record<string, unknown> = {};
+          try {
+            args = JSON.parse(await jsonOne(argPrompt, tool.inputSchema, true)) as Record<
+              string,
+              unknown
+            >;
+          } catch {
+            /* leave args empty on a grammar/parse miss */
+          }
+          return { reasoning, toolCall: { name: choice, args }, raw: r1.text };
+        }
+      : undefined,
 
     usage(): { used: number; quota: number } | null {
       return lastUsage;

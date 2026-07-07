@@ -49,6 +49,13 @@ interface AppendMsg {
   text: string;
   steps: number;
   reset?: boolean;
+  /** Sampling for the Ornith agentic path. `temperature <= 0` → greedy argmax
+   *  (byte-identical to the old path). The recommended Ornith-1 agentic profile
+   *  is temperature 0.6 / topP 0.95 / topK 20. */
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  seed?: number;
 }
 
 /**
@@ -100,6 +107,17 @@ interface OrnithSessionLike {
   generate(prompt: string, steps: number, onToken: (piece: string) => void): Promise<string>;
   /** Append-only continuation at the live state (L1); stats include kv_pos. */
   generateAppend(text: string, steps: number, onToken: (piece: string) => void): Promise<string>;
+  /** Sampled append-only continuation (agentic path): temperature/top-p/top-k
+   *  sampling with the same KV discipline. `temperature <= 0` → greedy. */
+  generateAppendSampled(
+    text: string,
+    steps: number,
+    temperature: number,
+    topP: number,
+    topK: number,
+    seed: number,
+    onToken: (piece: string) => void,
+  ): Promise<string>;
   /** L3 forced choice (clobbers the conversation state). */
   generateChoice(prompt: string, choices: string[], raw: boolean): Promise<string>;
   /** L3 JSON-schema grammar generation (clobbers the conversation state). */
@@ -394,9 +412,19 @@ async function json(msg: JsonMsg): Promise<void> {
 async function generateAppend(msg: AppendMsg): Promise<void> {
   if (ornith) {
     if (msg.reset) ornith.reset();
-    const stats = await ornith.generateAppend(msg.text, msg.steps, (piece) => {
-      post({ type: "delta", id: msg.id, text: piece });
-    });
+    const onTok = (piece: string) => post({ type: "delta", id: msg.id, text: piece });
+    const stats =
+      (msg.temperature ?? 0) > 0
+        ? await ornith.generateAppendSampled(
+            msg.text,
+            msg.steps,
+            msg.temperature as number,
+            msg.topP ?? 0.95,
+            msg.topK ?? 20,
+            msg.seed ?? 1,
+            onTok,
+          )
+        : await ornith.generateAppend(msg.text, msg.steps, onTok);
     post({ type: "done", id: msg.id, stats: JSON.parse(stats) as Record<string, number> });
     return;
   }

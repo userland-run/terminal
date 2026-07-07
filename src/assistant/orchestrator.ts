@@ -7,8 +7,26 @@
 // maps a user turn to at most one tool call (Gemini Nano can't reliably chain),
 // executes it, and produces a short reply. Chat/none turns stream a plain reply.
 // Codegen is handled separately (codegen.ts) since it needs the build pipeline.
+//
+// Permission modes (Claude-Code-style) gate the single tool call: `plan` blocks
+// mutation, `ask` (default) confirms edit/exec/network tools via the UI's
+// approval hook, `acceptEdits` auto-runs edits but confirms exec/network, and
+// `auto` runs everything. A UI without an approval hook (WebMCP, the guest
+// bridge, headless callers) auto-approves — those paths carry their own trust
+// boundary and have no surface to render a prompt.
 
-import type { AssistantTool, ChatTurn, ModelAdapter, ToolResult } from "./types";
+import type {
+  AgentMessage,
+  AgentTurn,
+  ApprovalDecision,
+  AssistantMode,
+  AssistantTool,
+  ChatTurn,
+  ModelAdapter,
+  ToolKind,
+  ToolResult,
+  TurnMetrics,
+} from "./types";
 
 /** UI sink the panel implements to render the turn as it unfolds. */
 export interface AssistantUI {
@@ -17,10 +35,41 @@ export interface AssistantUI {
   onReplyDelta(delta: string): void;
   onReplyDone(text: string): void;
   onError(message: string): void;
+  /** Streaming `<think>` reasoning (native agentic models). Rendered in a
+   *  dimmed, collapsible block separate from the answer. */
+  onReasoning?(delta: string): void;
+  /** The current step's reasoning is complete — collapse its block. */
+  onReasoningDone?(): void;
+  /** Live generation speed for the tok/s readouts (optional). */
+  onMetrics?(m: TurnMetrics): void;
+  /**
+   * Ask the user to approve a mutating tool call. Resolves to their choice.
+   * Absent → the caller has no approval surface, so the call auto-approves.
+   */
+  requestApproval?(req: {
+    tool: string;
+    kind: ToolKind;
+    args: Record<string, unknown>;
+    summary: string;
+  }): Promise<ApprovalDecision>;
+}
+
+/** Whether a tool call runs freely, needs confirmation, or is blocked. */
+export type Gate = "allow" | "ask" | "block";
+
+/** Pure policy: how `mode` treats a tool of capability `kind`. */
+export function gateFor(mode: AssistantMode, kind: ToolKind): Gate {
+  if (kind === "read") return "allow"; // reads never mutate — always fine
+  if (mode === "auto") return "allow";
+  if (mode === "plan") return "block";
+  if (mode === "acceptEdits") return kind === "edit" ? "allow" : "ask";
+  return "ask"; // "ask": confirm every mutation
 }
 
 export class Assistant {
   private history: ChatTurn[] = [];
+  private mode: AssistantMode = "ask";
+  private readonly alwaysAllow = new Set<string>();
 
   constructor(
     private readonly tools: AssistantTool[],
@@ -31,17 +80,28 @@ export class Assistant {
     return this.history;
   }
 
+  getMode(): AssistantMode {
+    return this.mode;
+  }
+
+  setMode(mode: AssistantMode): void {
+    this.mode = mode;
+  }
+
   reset(): void {
     this.history = [];
   }
 
   /** Handle one user message end-to-end, driving `ui` as it progresses. */
-  async send(text: string, ui: AssistantUI): Promise<void> {
+  async send(text: string, ui: AssistantUI, signal?: AbortSignal): Promise<void> {
     const adapter = this.getAdapter();
+    // Ornith and other natively-agentic models run the multi-step `<tool_call>`
+    // loop; everyone else uses the single-shot route-then-execute flow below.
+    if (adapter.agentStep) return this.sendAgentic(adapter, text, ui, signal);
     this.history.push({ role: "user", content: text });
     let reply = "";
     try {
-      const decision = await adapter.route(text, this.tools, this.history.slice(0, -1));
+      const decision = await adapter.route(text, this.tools, this.history.slice(0, -1), signal);
       const tool = this.tools.find((t) => t.name === decision.tool);
 
       if (!tool) {
@@ -50,14 +110,52 @@ export class Assistant {
           reply = decision.say.trim();
           ui.onReplyDelta(reply);
         } else {
-          reply = await adapter.chat(text, this.history.slice(0, -1), (d) => ui.onReplyDelta(d));
+          reply = await adapter.chat(
+            text,
+            this.history.slice(0, -1),
+            (d) => ui.onReplyDelta(d),
+            (m) => ui.onMetrics?.(m),
+            signal,
+          );
         }
       } else {
-        ui.onToolStart(tool.name, decision.args);
-        const res = await tool.execute(decision.args ?? {});
-        ui.onToolResult(tool.name, res);
-        reply = (decision.say && decision.say.trim()) || summarize(tool.name, res);
-        ui.onReplyDelta(reply);
+        const kind = tool.kind ?? "exec";
+        const args = decision.args ?? {};
+        let gate = gateFor(this.mode, kind);
+        if (gate === "ask" && this.alwaysAllow.has(tool.name)) gate = "allow";
+
+        if (gate === "block") {
+          // Plan mode: describe the intended action, don't run it.
+          const hint = summarizeArgs(tool.name, args);
+          reply =
+            `Plan mode — I'd run \`${tool.name}\`${hint ? " " + hint : ""}. ` +
+            `Switch to Ask, Accept Edits, or Auto to execute it.`;
+          ui.onReplyDelta(reply);
+        } else {
+          if (gate === "ask") {
+            const choice = ui.requestApproval
+              ? await ui.requestApproval({
+                  tool: tool.name,
+                  kind,
+                  args,
+                  summary: summarizeArgs(tool.name, args),
+                })
+              : "approve";
+            if (choice === "reject") {
+              reply = `Skipped \`${tool.name}\` — you rejected it.`;
+              ui.onReplyDelta(reply);
+              this.history.push({ role: "assistant", content: reply });
+              ui.onReplyDone(reply);
+              return;
+            }
+            if (choice === "always") this.alwaysAllow.add(tool.name);
+          }
+          ui.onToolStart(tool.name, args);
+          const res = await tool.execute(args);
+          ui.onToolResult(tool.name, res);
+          reply = (decision.say && decision.say.trim()) || summarize(tool.name, res);
+          ui.onReplyDelta(reply);
+        }
       }
     } catch (e) {
       const msg = (e as Error).message || "the assistant errored";
@@ -68,6 +166,133 @@ export class Assistant {
     this.history.push({ role: "assistant", content: reply });
     ui.onReplyDone(reply);
   }
+
+  /**
+   * Native `<tool_call>` agent loop for models that reason + call tools (Ornith).
+   * Each step the model thinks and either calls one tool or answers. A tool call
+   * is gated (plan/ask/auto) exactly like the single-shot path, executed, and its
+   * output fed back as a `<tool_response>` turn so the model observes it and
+   * continues — a read→edit→run→fix loop, bounded by MAX_STEPS.
+   */
+  private async sendAgentic(
+    adapter: ModelAdapter,
+    text: string,
+    ui: AssistantUI,
+    _signal?: AbortSignal,
+  ): Promise<void> {
+    this.history.push({ role: "user", content: text });
+    // Seed the transcript from prior chat history (final replies) + this turn.
+    const transcript: AgentMessage[] = this.history.map((t) => ({
+      role: t.role as "user" | "assistant",
+      content: t.content,
+    }));
+    const MAX_STEPS = 12;
+    let finalReply = "";
+    try {
+      for (let step = 0; step < MAX_STEPS; step++) {
+        const turn = await adapter.agentStep!(
+          transcript,
+          this.tools,
+          (kind, piece) =>
+            kind === "reasoning" ? ui.onReasoning?.(piece) : ui.onReplyDelta(piece),
+          (m) => ui.onMetrics?.(m),
+        );
+        ui.onReasoningDone?.(); // this step's `<think>` is done — collapse it
+        if (!turn.toolCall) {
+          finalReply = turn.answer ?? "";
+          break;
+        }
+        const call = turn.toolCall;
+        const tool = this.tools.find((t) => t.name === call.name);
+        if (!tool) {
+          transcript.push({ role: "assistant", content: this.compactAssistant(turn) });
+          transcript.push({
+            role: "tool",
+            name: call.name,
+            content: `error: no such tool "${call.name}". Available: ${this.tools
+              .map((t) => t.name)
+              .join(", ")}.`,
+          });
+          continue;
+        }
+        const kind = tool.kind ?? "exec";
+        let gate = gateFor(this.mode, kind);
+        if (gate === "ask" && this.alwaysAllow.has(tool.name)) gate = "allow";
+        if (gate === "block") {
+          finalReply =
+            `Plan mode — I'd run \`${tool.name}\` ${summarizeArgs(tool.name, call.args)}. ` +
+            "Switch to Ask, Accept Edits, or Auto to execute.";
+          ui.onReplyDelta(finalReply);
+          break;
+        }
+        if (gate === "ask") {
+          const choice = ui.requestApproval
+            ? await ui.requestApproval({
+                tool: tool.name,
+                kind,
+                args: call.args,
+                summary: summarizeArgs(tool.name, call.args),
+              })
+            : "approve";
+          if (choice === "reject") {
+            transcript.push({ role: "assistant", content: this.compactAssistant(turn) });
+            transcript.push({
+              role: "tool",
+              name: tool.name,
+              content: "The user rejected this call. Pick a different step or stop.",
+            });
+            continue;
+          }
+          if (choice === "always") this.alwaysAllow.add(tool.name);
+        }
+        ui.onToolStart(tool.name, call.args);
+        const res = await tool.execute(call.args);
+        ui.onToolResult(tool.name, res);
+        transcript.push({ role: "assistant", content: this.compactAssistant(turn) });
+        transcript.push({
+          role: "tool",
+          name: tool.name,
+          content: (res.output || (res.ok ? "ok" : "error")).slice(0, 600),
+        });
+      }
+      if (!finalReply) finalReply = "Reached the step limit.";
+    } catch (e) {
+      const msg = (e as Error).message || "the assistant errored";
+      ui.onError(msg);
+      this.history.push({ role: "assistant", content: `error: ${msg}` });
+      return;
+    }
+    this.history.push({ role: "assistant", content: finalReply });
+    ui.onReplyDone(finalReply);
+  }
+
+  /** Compact an assistant turn for the transcript: keep a short reasoning trace
+   *  and the tool call, but elide large string args (written file bodies) so the
+   *  re-prefilled transcript stays within the KV budget across steps. */
+  private compactAssistant(turn: AgentTurn): string {
+    if (!turn.toolCall) return turn.answer ?? "";
+    const args: Record<string, unknown> = { ...turn.toolCall.args };
+    for (const k of Object.keys(args)) {
+      const v = args[k];
+      if (typeof v === "string" && v.length > 120) args[k] = v.slice(0, 40) + "…(written)";
+    }
+    const think = turn.reasoning ? `<think>\n${turn.reasoning.slice(0, 240)}\n</think>\n` : "";
+    return `${think}<tool_call>\n${JSON.stringify({
+      name: turn.toolCall.name,
+      arguments: args,
+    })}\n</tool_call>`;
+  }
+}
+
+/** A short, human hint for a tool call (path/command), for action + approval lines. */
+export function summarizeArgs(name: string, args: Record<string, unknown>): string {
+  const a = args ?? {};
+  if (name === "run_shell" && typeof a.command === "string") return "`" + a.command + "`";
+  if (typeof a.path === "string") return a.path;
+  if (typeof a.from === "string" && typeof a.to === "string") return `${a.from} → ${a.to}`;
+  if (typeof a.file === "string") return a.file;
+  if (typeof a.ref === "string") return a.ref;
+  return "";
 }
 
 /** A terse, honest confirmation for a completed tool call. */
@@ -83,6 +308,12 @@ function summarize(name: string, res: ToolResult): string {
       return "Here's the file.";
     case "write_file":
       return "File written.";
+    case "make_dir":
+      return "Directory created.";
+    case "move_path":
+      return "Moved.";
+    case "delete_path":
+      return "Deleted.";
     case "install_app":
       return "Installed.";
     case "serve":
