@@ -187,19 +187,35 @@ async function cachedFetch(url: string, label: string): Promise<Uint8Array> {
   return bytes;
 }
 
-/** Bytes persisted per intermediate commit while a download streams. OPFS
- *  writables only persist on close(), so a multi-GB single-shot stream would
- *  lose EVERYTHING on a dropped connection or closed tab; committing every
- *  chunk this size caps the loss and gives Range-resume a real offset. */
-const COMMIT_BYTES = 256 << 20;
+/** Bytes streamed between explicit flushes while a download runs. A sync
+ *  access handle persists on flush(), so a dropped connection, crashed tab,
+ *  or reload loses at most this much — and Range-resume picks up from the
+ *  flushed size. */
+const FLUSH_BYTES = 64 << 20;
+
+/** Worker-only OPFS sync access handle (lib.dom lacks the type). */
+interface SyncHandle {
+  read(buffer: Uint8Array, opts?: { at?: number }): number;
+  write(buffer: Uint8Array, opts?: { at?: number }): number;
+  getSize(): number;
+  flush(): void;
+  close(): void;
+}
+
+const syncHandle = (h: FileSystemFileHandle): Promise<SyncHandle> =>
+  (h as FileSystemFileHandle & { createSyncAccessHandle(): Promise<SyncHandle> })
+    .createSyncAccessHandle();
 
 /**
  * Stream a URL into an OPFS file (skip when cached); return its handle.
- * Resumable: data streams into `<name>.part` with periodic commits and is
- * renamed to `<name>` only when complete, so a partial download is never
- * mistaken for a finished one. On retry (up to 5 attempts, or a fresh call
- * after a crash/reload) the fetch resumes from the committed offset with an
- * HTTP Range request; servers that ignore Range restart from zero.
+ * Resumable: data lands in `<name>.part` through a sync access handle
+ * (positional writes + periodic flush — no writable-stream swap-file
+ * semantics, which both copy the whole file per reopen and race the
+ * handle's cached state) and is renamed to `<name>` only when complete, so
+ * a partial download is never mistaken for a finished one. On retry (up to
+ * 5 attempts, or a fresh call after a crash/reload) the fetch resumes from
+ * the flushed size with an HTTP Range request; servers that ignore Range
+ * restart from zero.
  */
 async function fetchToOpfs(url: string, label: string): Promise<FileSystemFileHandle> {
   const name = cacheKey(url);
@@ -220,9 +236,11 @@ async function fetchToOpfs(url: string, label: string): Promise<FileSystemFileHa
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 5; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 1000 * attempt));
+    let sync: SyncHandle | null = null;
     try {
       const part = await dir.getFileHandle(partName, { create: true });
-      let have = (await part.getFile()).size;
+      sync = await syncHandle(part);
+      let have = sync.getSize();
       const resp = await fetch(
         url,
         have > 0 ? { headers: { Range: `bytes=${have}-` } } : undefined,
@@ -237,25 +255,23 @@ async function fetchToOpfs(url: string, label: string): Promise<FileSystemFileHa
         have = 0;
         total = Number(resp.headers.get("content-length") ?? 0);
       }
-      let writable = await part.createWritable({ keepExistingData: have > 0 });
-      if (have > 0) await writable.seek(have);
       const reader = resp.body.getReader();
-      let sinceCommit = 0;
+      let sinceFlush = 0;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        await writable.write(value);
+        sync.write(value, { at: have });
         have += value.length;
-        sinceCommit += value.length;
+        sinceFlush += value.length;
         post({ type: "progress", phase: "download", label, loaded: have, total });
-        if (sinceCommit >= COMMIT_BYTES) {
-          await writable.close();
-          writable = await part.createWritable({ keepExistingData: true });
-          await writable.seek(have);
-          sinceCommit = 0;
+        if (sinceFlush >= FLUSH_BYTES) {
+          sync.flush();
+          sinceFlush = 0;
         }
       }
-      await writable.close();
+      sync.flush();
+      sync.close();
+      sync = null;
       if (total > 0 && have !== total) {
         throw new Error(`${url}: got ${have} of ${total} bytes`);
       }
@@ -265,6 +281,11 @@ async function fetchToOpfs(url: string, label: string): Promise<FileSystemFileHa
       return await dir.getFileHandle(name);
     } catch (e) {
       lastError = e;
+      try {
+        sync?.close();
+      } catch {
+        // already closed
+      }
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
@@ -289,16 +310,7 @@ async function initOrnith(msg: InitMsg): Promise<void> {
   // worker-only FileSystemSyncAccessHandle serves synchronous reads to the
   // wasm loader through a reused scratch buffer.
   const handle = await fetchToOpfs(msg.ggufUrl, "model");
-  // Worker-only API; lib.dom lacks the type.
-  const sync = await (
-    handle as FileSystemFileHandle & {
-      createSyncAccessHandle(): Promise<{
-        read(buffer: Uint8Array, opts?: { at?: number }): number;
-        getSize(): number;
-        close(): void;
-      }>;
-    }
-  ).createSyncAccessHandle();
+  const sync = await syncHandle(handle);
   const size = sync.getSize();
   const scratch = new Uint8Array(1 << 20);
   const readFn = (offset: number, len: number): Uint8Array => {
