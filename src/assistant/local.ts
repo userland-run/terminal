@@ -972,10 +972,18 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
               undefined, // don't stream the file body into the chat
               onMetrics,
             );
-            const content = cev.text
-              .trim()
-              .replace(/^```[\w-]*\n?/, "")
-              .replace(/\n?```\s*$/, "");
+            // The agentic model sometimes wraps the file in a <tool_call>/JSON
+            // (name+arguments.content) instead of emitting raw text — unwrap it.
+            let content = cev.text.trim();
+            const obj = findToolCallObject(content) ?? parseLooseJsonObject(content);
+            const argContent = (obj?.arguments as { content?: unknown } | undefined)?.content;
+            if (typeof argContent === "string") {
+              content = argContent;
+            } else if (obj && typeof obj.content === "string") {
+              content = obj.content;
+            } else {
+              content = content.replace(/^```[\w-]*\n?/, "").replace(/\n?```\s*$/, "");
+            }
             return { reasoning, toolCall: { name: "write_file", args: { path, content } }, raw: r1.text };
           }
 
