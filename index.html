@@ -24,14 +24,10 @@
     <!-- The terminal is a web component with its own shadow root. Standalone uses
          all features (the createTerminal defaults); embedders compose via the
          <nano-terminal> attributes or its `config` property. -->
+    <nano-terminal></nano-terminal>
     <script type="module">
       import { defineNanoTerminal } from "/src/web-component.ts";
       defineNanoTerminal();
-      // TEMP (HF production-path verify): engine only — model/tokenizer URLs
-      // fall through to the userland-run Hugging Face defaults.
-      const el = document.createElement("nano-terminal");
-      el.config = { assistant: { local: { engine: "ornith" } } };
-      document.body.appendChild(el);
     </script>
   </body>
 </html>
