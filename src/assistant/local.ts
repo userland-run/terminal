@@ -517,12 +517,6 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
     prepare: ensureReady,
 
     async route(userText, tools: AssistantTool[], history): Promise<RouteDecision> {
-      if (isOrnith) {
-        // v1: the 9B is chat-only in the panel (constrained tool routing is
-        // a QwenSession feature). No `say` — the orchestrator streams the
-        // reply through chat(), which keeps the conversation KV appended.
-        return { tool: "chat", args: {} };
-      }
       const names = tools.map((t) => t.name);
       const toolLines = tools.map((t) => `- ${t.name}: ${t.description}`).join("\n");
 

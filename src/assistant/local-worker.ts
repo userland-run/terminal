@@ -100,6 +100,13 @@ interface OrnithSessionLike {
   generate(prompt: string, steps: number, onToken: (piece: string) => void): Promise<string>;
   /** Append-only continuation at the live state (L1); stats include kv_pos. */
   generateAppend(text: string, steps: number, onToken: (piece: string) => void): Promise<string>;
+  /** L3 forced choice (clobbers the conversation state). */
+  generateChoice(prompt: string, choices: string[], raw: boolean): Promise<string>;
+  /** L3 JSON-schema grammar generation (clobbers the conversation state). */
+  generateJson(prompt: string, schemaJson: string, raw: boolean): Promise<string>;
+  snapshot(): number;
+  restore(id: number): void;
+  dropCheckpoint(id: number): void;
 }
 
 interface QwenSessionLike {
@@ -301,12 +308,22 @@ async function chat(msg: ChatMsg): Promise<void> {
 }
 
 async function choose(msg: ChooseMsg): Promise<void> {
+  if (ornith) {
+    const choice = await ornith.generateChoice(msg.prompt, msg.choices, !!msg.raw);
+    post({ type: "done", id: msg.id, choice });
+    return;
+  }
   if (!session) throw new Error("session not initialized");
   const choice = await session.generateChoice(msg.prompt, msg.choices, !!msg.raw);
   post({ type: "done", id: msg.id, choice });
 }
 
 async function json(msg: JsonMsg): Promise<void> {
+  if (ornith) {
+    const out = await ornith.generateJson(msg.prompt, msg.schema, !!msg.raw);
+    post({ type: "done", id: msg.id, json: out });
+    return;
+  }
   if (!session) throw new Error("session not initialized");
   const out = await session.generateJson(msg.prompt, msg.schema, !!msg.raw);
   post({ type: "done", id: msg.id, json: out });
@@ -330,17 +347,31 @@ async function generateAppend(msg: AppendMsg): Promise<void> {
 }
 
 function snapshot(msg: SnapshotMsg): void {
+  if (ornith) {
+    post({ type: "done", id: msg.id, ckpt: ornith.snapshot() });
+    return;
+  }
   if (!session) throw new Error("session not initialized");
   post({ type: "done", id: msg.id, ckpt: session.snapshot() });
 }
 
 function restore(msg: RestoreMsg): void {
+  if (ornith) {
+    ornith.restore(msg.ckpt);
+    post({ type: "done", id: msg.id });
+    return;
+  }
   if (!session) throw new Error("session not initialized");
   session.restore(msg.ckpt);
   post({ type: "done", id: msg.id });
 }
 
 function dropCkpt(msg: DropCkptMsg): void {
+  if (ornith) {
+    ornith.dropCheckpoint(msg.ckpt);
+    post({ type: "done", id: msg.id });
+    return;
+  }
   if (!session) throw new Error("session not initialized");
   session.dropCheckpoint(msg.ckpt);
   post({ type: "done", id: msg.id });
