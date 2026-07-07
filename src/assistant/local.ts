@@ -256,6 +256,11 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
   // --- Append-only chat path ---
 
   const sysBlock = () => `<|im_start|>system\n${SYSTEM_PROMPT}<|im_end|>\n`;
+  // Ornith (Qwen3.5) is a reasoning model: the assistant cue force-closes an
+  // empty <think> block so replies start immediately.
+  const assistantCue = isOrnith
+    ? "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    : "<|im_start|>assistant\n";
   /** A turn appended onto a KV that sits mid-assistant-turn. */
   const midTurn = (role: string, content: string) =>
     `<|im_end|>\n<|im_start|>${role}\n${content}`;
@@ -292,7 +297,7 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
     if (kvTurns && isPrefix(kvTurns, history)) {
       let delta = "";
       for (const t of history.slice(kvTurns.length)) delta += midTurn(t.role, t.content);
-      delta += `${midTurn("user", userText)}<|im_end|>\n<|im_start|>assistant\n`;
+      delta += `${midTurn("user", userText)}<|im_end|>\n${assistantCue}`;
       if (kvPos + estimateTokens(delta) + steps + 64 <= cfg.maxSeq) {
         try {
           return await runAppend(delta, false, userText, history, steps, onDelta);
@@ -310,7 +315,7 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
     );
     let text = sysBlock();
     for (const t of trimmed) text += `<|im_start|>${t.role}\n${t.content}<|im_end|>\n`;
-    text += `<|im_start|>user\n${userText}<|im_end|>\n<|im_start|>assistant\n`;
+    text += `<|im_start|>user\n${userText}<|im_end|>\n${assistantCue}`;
     return runAppend(text, true, userText, trimmed, steps, onDelta);
   }
 
@@ -513,11 +518,10 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
 
     async route(userText, tools: AssistantTool[], history): Promise<RouteDecision> {
       if (isOrnith) {
-        // v1: the 9B is chat-only in the panel (constrained decoding and the
-        // append-only KV machinery are QwenSession features; Ornith parity
-        // for those is tracked follow-up work).
-        const say = await generate(buildPrompt(userText, history, cfg.maxSeq - 640), 512);
-        return { tool: "chat", args: {}, say };
+        // v1: the 9B is chat-only in the panel (constrained tool routing is
+        // a QwenSession feature). No `say` — the orchestrator streams the
+        // reply through chat(), which keeps the conversation KV appended.
+        return { tool: "chat", args: {} };
       }
       const names = tools.map((t) => t.name);
       const toolLines = tools.map((t) => `- ${t.name}: ${t.description}`).join("\n");
@@ -629,9 +633,6 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
     },
 
     async chat(userText, history, onDelta): Promise<string> {
-      if (isOrnith) {
-        return generate(buildPrompt(userText, history, cfg.maxSeq - 640), 512, onDelta);
-      }
       return appendChat(userText, history, onDelta);
     },
 

@@ -98,6 +98,8 @@ interface OrnithSessionLike {
   adapter(): string;
   reset(): void;
   generate(prompt: string, steps: number, onToken: (piece: string) => void): Promise<string>;
+  /** Append-only continuation at the live state (L1); stats include kv_pos. */
+  generateAppend(text: string, steps: number, onToken: (piece: string) => void): Promise<string>;
 }
 
 interface QwenSessionLike {
@@ -311,6 +313,14 @@ async function json(msg: JsonMsg): Promise<void> {
 }
 
 async function generateAppend(msg: AppendMsg): Promise<void> {
+  if (ornith) {
+    if (msg.reset) ornith.reset();
+    const stats = await ornith.generateAppend(msg.text, msg.steps, (piece) => {
+      post({ type: "delta", id: msg.id, text: piece });
+    });
+    post({ type: "done", id: msg.id, stats: JSON.parse(stats) as Record<string, number> });
+    return;
+  }
   if (!session) throw new Error("session not initialized");
   if (msg.reset) session.reset();
   const stats = await session.generateAppend(msg.text, msg.steps, (piece) => {
