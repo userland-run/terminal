@@ -191,6 +191,13 @@ export interface ModelAdapter {
     onVisible?: (kind: "reasoning" | "answer", text: string) => void,
     onMetrics?: (m: TurnMetrics) => void,
   ): Promise<AgentTurn>;
+  /**
+   * Decompose a multi-step goal into an ordered list of concrete single-action
+   * steps (one file / one command each). The orchestrator runs a focused agent
+   * turn per step — a small model sequences those far more reliably than one
+   * self-planned loop. Optional; present on the local (Ornith) adapter.
+   */
+  plan?(goal: string, tools: AssistantTool[]): Promise<string[]>;
   /** Release any held session/resources. */
   destroy?(): void;
 }

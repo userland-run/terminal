@@ -937,7 +937,47 @@ kbd {
 .asst-msg.bot { align-self: flex-start; background: var(--elevated); color: var(--fg); }
 .asst-status { color: var(--label); font-size: 11px; font-family: var(--font-mono); }
 .asst-error { color: #f0a0a0; font-size: 12px; }
-/* — Agent transcript: reasoning disclosure + tool status cards — */
+/* — Agent transcript: plan checklist + reasoning disclosure + tool cards — */
+.asst-plan {
+  align-self: stretch;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--primary);
+  border-radius: var(--radius-md);
+  background: rgba(169, 132, 245, 0.05);
+  padding: var(--space-2) var(--space-3);
+}
+.asst-plan-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted-fg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: var(--space-1);
+}
+.asst-plan-ic { color: var(--primary); }
+.asst-plan-ic::before { content: "\\2261"; }
+.asst-plan-step {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: 12px;
+  color: var(--fg);
+  padding: 2px 0;
+}
+.asst-plan-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--primary);
+  opacity: 0.7;
+}
+
+
 .asst-reason {
   align-self: stretch;
   border: 1px solid var(--border);

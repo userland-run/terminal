@@ -442,6 +442,7 @@ export class AssistantPanel {
         this.appendReasoning(d);
       },
       onReasoningDone: () => this.collapseReasoning(),
+      onPlan: (steps) => this.addPlan(steps),
       onToolStart: (name, args) => {
         this.collapseReasoning();
         endBubble();
@@ -610,6 +611,22 @@ export class AssistantPanel {
       card.append(det);
     }
     this.activeTool = null;
+    this.scroll();
+  }
+
+  /** Render a decomposed plan as a compact checklist above the steps. */
+  private addPlan(steps: string[]): void {
+    if (!steps.length) return;
+    const box = div("asst-plan");
+    const head = div("asst-plan-head");
+    head.append(span("asst-plan-ic"), text("Plan"));
+    box.append(head);
+    for (const s of steps) {
+      const row = div("asst-plan-step");
+      row.append(span("asst-plan-dot"), spanText(s));
+      box.append(row);
+    }
+    this.log.append(box);
     this.scroll();
   }
 

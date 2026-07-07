@@ -40,6 +40,8 @@ export interface AssistantUI {
   onReasoning?(delta: string): void;
   /** The current step's reasoning is complete — collapse its block. */
   onReasoningDone?(): void;
+  /** A decomposed plan (ordered step descriptions), rendered as a checklist. */
+  onPlan?(steps: string[]): void;
   /** Live generation speed for the tok/s readouts (optional). */
   onMetrics?(m: TurnMetrics): void;
   /**
@@ -181,81 +183,62 @@ export class Assistant {
     _signal?: AbortSignal,
   ): Promise<void> {
     this.history.push({ role: "user", content: text });
-    // Seed the transcript from prior chat history (final replies) + this turn.
-    const transcript: AgentMessage[] = this.history.map((t) => ({
+    const transcript: AgentMessage[] = this.history.slice(0, -1).map((t) => ({
       role: t.role as "user" | "assistant",
       content: t.content,
     }));
-    const MAX_STEPS = 12;
+
+    // Decompose the request into ordered single-action steps. A 9B sequences
+    // "write file A → write file B → serve" far more reliably as separate
+    // focused turns than as one self-planned loop (where it fixates on one
+    // file). Falls back to the whole request as a single step.
+    let steps: string[] = [text];
+    if (adapter.plan) {
+      try {
+        const p = await adapter.plan(text, this.tools);
+        if (Array.isArray(p) && p.length > 1) steps = p;
+      } catch {
+        /* keep the single-step fallback */
+      }
+    }
+    if (steps.length > 1) ui.onPlan?.(steps);
+
+    let budget = 16; // hard cap on total tool-producing agent actions
     let finalReply = "";
     try {
-      for (let step = 0; step < MAX_STEPS; step++) {
-        const turn = await adapter.agentStep!(
-          transcript,
-          this.tools,
-          (kind, piece) =>
-            kind === "reasoning" ? ui.onReasoning?.(piece) : ui.onReplyDelta(piece),
-          (m) => ui.onMetrics?.(m),
-        );
-        ui.onReasoningDone?.(); // this step's `<think>` is done — collapse it
-        if (!turn.toolCall) {
-          finalReply = turn.answer ?? "";
-          break;
-        }
-        const call = turn.toolCall;
-        const tool = this.tools.find((t) => t.name === call.name);
-        if (!tool) {
-          transcript.push({ role: "assistant", content: this.compactAssistant(turn) });
-          transcript.push({
-            role: "tool",
-            name: call.name,
-            content: `error: no such tool "${call.name}". Available: ${this.tools
-              .map((t) => t.name)
-              .join(", ")}.`,
-          });
-          continue;
-        }
-        const kind = tool.kind ?? "exec";
-        let gate = gateFor(this.mode, kind);
-        if (gate === "ask" && this.alwaysAllow.has(tool.name)) gate = "allow";
-        if (gate === "block") {
-          finalReply =
-            `Plan mode — I'd run \`${tool.name}\` ${summarizeArgs(tool.name, call.args)}. ` +
-            "Switch to Ask, Accept Edits, or Auto to execute.";
-          ui.onReplyDelta(finalReply);
-          break;
-        }
-        if (gate === "ask") {
-          const choice = ui.requestApproval
-            ? await ui.requestApproval({
-                tool: tool.name,
-                kind,
-                args: call.args,
-                summary: summarizeArgs(tool.name, call.args),
-              })
-            : "approve";
-          if (choice === "reject") {
-            transcript.push({ role: "assistant", content: this.compactAssistant(turn) });
-            transcript.push({
-              role: "tool",
-              name: tool.name,
-              content: "The user rejected this call. Pick a different step or stop.",
-            });
-            continue;
+      for (const step of steps) {
+        if (budget <= 0) break;
+        // Push the step as the active instruction; give it up to 2 agent turns
+        // to land its action (one retry if the first doesn't call a tool).
+        transcript.push({ role: "user", content: step });
+        for (let attempt = 0; attempt < 2 && budget > 0; attempt++) {
+          budget--;
+          const turn = await adapter.agentStep!(
+            transcript,
+            this.tools,
+            (kind, piece) =>
+              kind === "reasoning" ? ui.onReasoning?.(piece) : ui.onReplyDelta(piece),
+            (m) => ui.onMetrics?.(m),
+          );
+          ui.onReasoningDone?.();
+          if (!turn.toolCall) {
+            if (turn.answer && turn.answer !== "(done)") {
+              transcript.push({ role: "assistant", content: turn.answer });
+            }
+            break; // no tool for this step → move on
           }
-          if (choice === "always") this.alwaysAllow.add(tool.name);
+          const outcome = await this.runToolCall(turn, ui, transcript);
+          if (outcome === "blocked") {
+            finalReply = "Plan mode — switch to Ask, Accept Edits, or Auto to execute tools.";
+            ui.onReplyDelta(finalReply);
+            budget = 0;
+            break;
+          }
+          if (outcome === "rejected") continue; // let it pick a different action
+          break; // executed → this step is done
         }
-        ui.onToolStart(tool.name, call.args);
-        const res = await tool.execute(call.args);
-        ui.onToolResult(tool.name, res);
-        transcript.push({ role: "assistant", content: this.compactAssistant(turn) });
-        transcript.push({
-          role: "tool",
-          name: tool.name,
-          content: (res.output || (res.ok ? "ok" : "error")).slice(0, 600),
-        });
       }
-      if (!finalReply) finalReply = "Reached the step limit.";
+      if (!finalReply) finalReply = steps.length > 1 ? "All steps done." : "Done.";
     } catch (e) {
       const msg = (e as Error).message || "the assistant errored";
       ui.onError(msg);
@@ -264,6 +247,52 @@ export class Assistant {
     }
     this.history.push({ role: "assistant", content: finalReply });
     ui.onReplyDone(finalReply);
+  }
+
+  /** Gate + execute one tool call, stream it to `ui`, and append the assistant
+   *  turn + tool result to `transcript`. Returns the outcome. */
+  private async runToolCall(
+    turn: AgentTurn,
+    ui: AssistantUI,
+    transcript: AgentMessage[],
+  ): Promise<"executed" | "rejected" | "blocked" | "unknown"> {
+    const call = turn.toolCall!;
+    const tool = this.tools.find((t) => t.name === call.name);
+    if (!tool) {
+      transcript.push({ role: "assistant", content: this.compactAssistant(turn) });
+      transcript.push({ role: "tool", name: call.name, content: `error: no such tool "${call.name}".` });
+      return "unknown";
+    }
+    const kind = tool.kind ?? "exec";
+    let gate = gateFor(this.mode, kind);
+    if (gate === "ask" && this.alwaysAllow.has(tool.name)) gate = "allow";
+    if (gate === "block") return "blocked";
+    if (gate === "ask") {
+      const choice = ui.requestApproval
+        ? await ui.requestApproval({
+            tool: tool.name,
+            kind,
+            args: call.args,
+            summary: summarizeArgs(tool.name, call.args),
+          })
+        : "approve";
+      if (choice === "reject") {
+        transcript.push({ role: "assistant", content: this.compactAssistant(turn) });
+        transcript.push({ role: "tool", name: tool.name, content: "The user rejected this call." });
+        return "rejected";
+      }
+      if (choice === "always") this.alwaysAllow.add(tool.name);
+    }
+    ui.onToolStart(tool.name, call.args);
+    const res = await tool.execute(call.args);
+    ui.onToolResult(tool.name, res);
+    transcript.push({ role: "assistant", content: this.compactAssistant(turn) });
+    transcript.push({
+      role: "tool",
+      name: tool.name,
+      content: (res.output || (res.ok ? "ok" : "error")).slice(0, 600),
+    });
+    return "executed";
   }
 
   /** Compact an assistant turn for the transcript: keep a short reasoning trace

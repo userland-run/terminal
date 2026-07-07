@@ -1000,6 +1000,30 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
         }
       : undefined,
 
+    // Decompose a multi-step goal into an ordered list of single-action steps.
+    // Only meaningful for the agentic (Ornith) path; the orchestrator runs one
+    // focused turn per step.
+    plan: isOrnith
+      ? async (goal: string, tools: AssistantTool[]): Promise<string[]> => {
+          const toolNames = tools.map((t) => t.name).join(", ");
+          const prompt = buildPrompt(
+            `Goal:\n${goal}\n\nBreak this into an ordered list of concrete single-action steps ` +
+              `for a coding agent to execute one at a time — ONE file write or ONE command per ` +
+              `step (e.g. "write /app/server.js: a node http server on port 8080", then ` +
+              `"serve /app/server.js on port 8080"). Tools: ${toolNames}. Reply with ONLY a ` +
+              `numbered list, one step per line, at most 6 steps, no other prose.`,
+            [],
+            cfg.maxSeq - 400,
+          );
+          const raw = await generate(prompt, 320);
+          return raw
+            .split("\n")
+            .map((l) => l.replace(/^\s*(?:\d+[.)]|[-*])\s*/, "").trim())
+            .filter((l) => l.length > 4 && !/^```/.test(l) && !/^(here|sure|ok\b|the )/i.test(l))
+            .slice(0, 8);
+        }
+      : undefined,
+
     usage(): { used: number; quota: number } | null {
       return lastUsage;
     },
