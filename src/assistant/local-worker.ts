@@ -187,9 +187,23 @@ async function cachedFetch(url: string, label: string): Promise<Uint8Array> {
   return bytes;
 }
 
-/** Stream a URL into an OPFS file (skip when cached); return its handle. */
+/** Bytes persisted per intermediate commit while a download streams. OPFS
+ *  writables only persist on close(), so a multi-GB single-shot stream would
+ *  lose EVERYTHING on a dropped connection or closed tab; committing every
+ *  chunk this size caps the loss and gives Range-resume a real offset. */
+const COMMIT_BYTES = 256 << 20;
+
+/**
+ * Stream a URL into an OPFS file (skip when cached); return its handle.
+ * Resumable: data streams into `<name>.part` with periodic commits and is
+ * renamed to `<name>` only when complete, so a partial download is never
+ * mistaken for a finished one. On retry (up to 5 attempts, or a fresh call
+ * after a crash/reload) the fetch resumes from the committed offset with an
+ * HTTP Range request; servers that ignore Range restart from zero.
+ */
 async function fetchToOpfs(url: string, label: string): Promise<FileSystemFileHandle> {
   const name = cacheKey(url);
+  const partName = `${name}.part`;
   const root = await navigator.storage.getDirectory();
   const dir = await root.getDirectoryHandle("nanoinfer-models", { create: true });
   try {
@@ -202,22 +216,58 @@ async function fetchToOpfs(url: string, label: string): Promise<FileSystemFileHa
   } catch {
     // not cached
   }
-  const resp = await fetch(url);
-  if (!resp.ok || !resp.body) throw new Error(`${url}: HTTP ${resp.status}`);
-  const total = Number(resp.headers.get("content-length") ?? 0);
-  const handle = await dir.getFileHandle(name, { create: true });
-  const writable = await handle.createWritable();
-  const reader = resp.body.getReader();
-  let received = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    await writable.write(value);
-    received += value.length;
-    post({ type: "progress", phase: "download", label, loaded: received, total });
+
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 1000 * attempt));
+    try {
+      const part = await dir.getFileHandle(partName, { create: true });
+      let have = (await part.getFile()).size;
+      const resp = await fetch(
+        url,
+        have > 0 ? { headers: { Range: `bytes=${have}-` } } : undefined,
+      );
+      if (!resp.ok || !resp.body) throw new Error(`${url}: HTTP ${resp.status}`);
+      let total: number;
+      if (have > 0 && resp.status === 206) {
+        // Content-Range: bytes <from>-<to>/<total>
+        total = Number(resp.headers.get("content-range")?.split("/")[1] ?? 0);
+      } else {
+        // Full response (fresh, or the server ignored the Range) — restart.
+        have = 0;
+        total = Number(resp.headers.get("content-length") ?? 0);
+      }
+      let writable = await part.createWritable({ keepExistingData: have > 0 });
+      if (have > 0) await writable.seek(have);
+      const reader = resp.body.getReader();
+      let sinceCommit = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        await writable.write(value);
+        have += value.length;
+        sinceCommit += value.length;
+        post({ type: "progress", phase: "download", label, loaded: have, total });
+        if (sinceCommit >= COMMIT_BYTES) {
+          await writable.close();
+          writable = await part.createWritable({ keepExistingData: true });
+          await writable.seek(have);
+          sinceCommit = 0;
+        }
+      }
+      await writable.close();
+      if (total > 0 && have !== total) {
+        throw new Error(`${url}: got ${have} of ${total} bytes`);
+      }
+      await (
+        part as FileSystemFileHandle & { move(name: string): Promise<void> }
+      ).move(name);
+      return await dir.getFileHandle(name);
+    } catch (e) {
+      lastError = e;
+    }
   }
-  await writable.close();
-  return handle;
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 async function initOrnith(msg: InitMsg): Promise<void> {
