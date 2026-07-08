@@ -202,6 +202,24 @@ function findToolCallObject(region: string): Record<string, unknown> | null {
   return at < 0 ? null : parseLooseJsonObject(region.slice(at));
 }
 
+/** Last-resort extraction of the `content` string from a tool-call wrapper whose
+ *  JSON won't parse — file bodies (HTML/code) full of unescaped quotes defeat a
+ *  strict parse, but `content` is the final field, so take from `"content": "`
+ *  to the trailing `"}}` and JSON-unescape. Returns null if no such field. */
+function extractWrappedContent(text: string): string | null {
+  const m = text.match(/"content"\s*:\s*"/);
+  if (!m || m.index === undefined) return null;
+  let s = text.slice(m.index + m[0].length);
+  s = s.replace(/"\s*\}\s*\}\s*$/, "").replace(/"\s*$/, ""); // strip trailing "}} / "
+  return s
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\t/g, "\t")
+    .replace(/\\"/g, '"')
+    .replace(/\\\//g, "/")
+    .replace(/\\\\/g, "\\");
+}
+
 /** Split one assistant generation into reasoning + (a tool call | a final answer). */
 export function parseOrnithAgentTurn(raw: string): AgentTurn {
   const thinkM = raw.match(/<think>([\s\S]*?)<\/think>/);
@@ -977,10 +995,14 @@ export function createLocalModel(config: LocalModelConfig = {}): LocalModel {
             let content = cev.text.trim();
             const obj = findToolCallObject(content) ?? parseLooseJsonObject(content);
             const argContent = (obj?.arguments as { content?: unknown } | undefined)?.content;
-            if (typeof argContent === "string") {
+            if (typeof argContent === "string" && argContent.trim()) {
               content = argContent;
-            } else if (obj && typeof obj.content === "string") {
+            } else if (obj && typeof obj.content === "string" && obj.content.trim()) {
               content = obj.content;
+            } else if (/^\s*(<tool_call>|\{\s*"name")/.test(content)) {
+              // A wrapper whose inner JSON didn't parse (unescaped quotes in the
+              // HTML/code body) — pull the `content` string out directly.
+              content = extractWrappedContent(content) ?? content;
             } else {
               content = content.replace(/^```[\w-]*\n?/, "").replace(/\n?```\s*$/, "");
             }
