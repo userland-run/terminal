@@ -51,8 +51,11 @@ const OPENCODE_CONFIG_JSON = JSON.stringify(
   null,
   2,
 );
+// --single-threaded-gc is required for `serve`: V8's parallel GC helper threads
+// thrash the emulator scheduler, turning serve's startup into an 11+min wall;
+// single-threaded GC collapses it to ~63s to listening (see the catalog recipe).
 const OPENCODE_BIN_WRAPPER =
-  "#!/bin/sh\nexec node --conditions=node --require /usr/local/lib/opencode/nano-net-proxy.cjs /usr/local/lib/opencode/index-nano.js \"$@\"\n";
+  "#!/bin/sh\nexec node --single-threaded-gc --conditions=node --require /usr/local/lib/opencode/nano-net-proxy.cjs /usr/local/lib/opencode/index-nano.js \"$@\"\n";
 
 /**
  * Dev-only: seed the opencode guest tree from the vite-served `/opencode/` bundle
