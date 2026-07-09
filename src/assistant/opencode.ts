@@ -35,9 +35,60 @@ const PORT = 4096;
 /** Provider/model ids from the recipe's default /root/.config/opencode/opencode.json. */
 const PROVIDER_ID = "nano";
 const MODEL_ID = "nanoinfer-local";
-/** Catalog apps opencode needs in the guest, install order. installApp() does
- *  NOT resolve recipe deps, so the runtime (node) and ripgrep are explicit. */
-const APPS = ["node", "ripgrep", "opencode"];
+/** The recipe's default config + bin wrapper, inlined for the dev seed below. */
+const OPENCODE_CONFIG_JSON = JSON.stringify(
+  {
+    $schema: "https://opencode.ai/config.json",
+    autoupdate: false,
+    provider: {
+      nano: {
+        npm: "@ai-sdk/openai-compatible",
+        options: { baseURL: "http://127.0.0.1:8787/v1", apiKey: "nano-local" },
+        models: { "nanoinfer-local": { name: "nanoinfer (local)", limit: { context: 2048, output: 512 } } },
+      },
+    },
+  },
+  null,
+  2,
+);
+const OPENCODE_BIN_WRAPPER =
+  "#!/bin/sh\nexec node --conditions=node --require /usr/local/lib/opencode/nano-net-proxy.cjs /usr/local/lib/opencode/index-nano.js \"$@\"\n";
+
+/**
+ * Dev-only: seed the opencode guest tree from the vite-served `/opencode/` bundle
+ * (terminal/public/opencode — the *patched* recipe out/ tree + a nano-files.json
+ * manifest) when the catalog has no published opencode recipe. Mirrors what
+ * installApp would materialize: the Node bundle under /usr/local/lib/opencode,
+ * the default config, and the /usr/local/bin/opencode wrapper. node + ripgrep
+ * still come from the published catalog.
+ */
+async function devSeedOpencode(vm: TerminalHandle["vm"]): Promise<void> {
+  const base = new URL("opencode/", document.baseURI).href;
+  let files: string[];
+  try {
+    const res = await fetch(base + "nano-files.json");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    files = (await res.json()) as string[];
+  } catch (e) {
+    throw new Error(
+      `opencode is not in the catalog and the dev bundle is unavailable ` +
+        `(GET ${base}nano-files.json failed: ${(e as Error).message}). Publish the opencode ` +
+        `recipe, or stage terminal/public/opencode from the patched recipe out/ (+ nano-files.json).`,
+    );
+  }
+  vm.makeDir("/usr/local/lib/opencode");
+  for (const rel of files) {
+    const buf = new Uint8Array(await (await fetch(base + rel)).arrayBuffer());
+    const guestPath = `/usr/local/lib/opencode/${rel}`;
+    const slash = guestPath.lastIndexOf("/");
+    if (slash > 0) vm.makeDir(guestPath.slice(0, slash));
+    vm.addFile(guestPath, buf, 0o644);
+  }
+  vm.makeDir("/root/.config/opencode");
+  vm.addFile("/root/.config/opencode/opencode.json", OPENCODE_CONFIG_JSON, 0o644);
+  vm.makeDir("/usr/local/bin");
+  vm.addFile("/usr/local/bin/opencode", OPENCODE_BIN_WRAPPER, 0o755);
+}
 /** Cold-loading the 16 MB bundle in the emulator is slow until the recipe
  *  ships a warm snapshot; be generous before declaring the launch dead. */
 const LAUNCH_TIMEOUT_MS = 180_000;
@@ -91,11 +142,21 @@ export function createOpencodeAdapter(handle: TerminalHandle): ModelAdapter {
         onProgress?.(1);
         return;
       }
-      for (let i = 0; i < APPS.length; i++) {
-        const ok = await handle.installApp(APPS[i], { quiet: true });
-        if (!ok) throw new Error(`install of "${APPS[i]}" from the catalog failed`);
-        onProgress?.((i + 1) / (APPS.length + 1));
+      // node is required (published catalog). ripgrep powers opencode's grep
+      // tools but is not needed to reach listening, so it is best-effort.
+      if (!(await handle.installApp("node", { quiet: true }))) {
+        throw new Error(`install of "node" from the catalog failed`);
       }
+      onProgress?.(0.33);
+      await handle.installApp("ripgrep", { quiet: true }); // best-effort
+      onProgress?.(0.6);
+      // opencode: install from the catalog if the recipe is published, else (dev)
+      // seed the tree from the vite-served /opencode/ bundle so the panel works
+      // before the recipe ships.
+      if (!(await handle.installApp("opencode", { quiet: true }))) {
+        await devSeedOpencode(handle.vm);
+      }
+      onProgress?.(0.9);
       handle.vm.writeStdin(`opencode serve --port ${PORT} --hostname 127.0.0.1\r`);
       const start = Date.now();
       while (Date.now() - start < LAUNCH_TIMEOUT_MS) {
