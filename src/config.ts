@@ -7,7 +7,7 @@
 // bundle, which `tsc` can't resolve — see src/catalog.ts). SDK embedders import
 // the type from @sdk; this local copy keeps the terminal's own build typed.
 
-import type { CloudModelConfig } from "./assistant/types";
+import type { AssistantMode, CloudModelConfig } from "./assistant/types";
 import type { LocalModelConfig } from "./assistant/local";
 
 export interface TerminalPreviewConfig {
@@ -33,6 +33,19 @@ export interface TerminalFeatureConfig {
 }
 
 export interface TerminalAssistantConfig {
+  /**
+   * Enable the assistant. Defaults to on; set `false` (or `features.assistant:
+   * false`, or the `no-assistant` attribute) to hide the panel entirely.
+   */
+  enabled?: boolean;
+  /** Model selected when the panel first opens. Default "nano". */
+  defaultModel?: "nano" | "cloud" | "local";
+  /**
+   * Permission mode the chat starts in (Claude-Code-style). Default "ask"
+   * (confirm before mutating tools). "plan" = read-only planning,
+   * "acceptEdits" = auto-run edits, "auto" = run everything.
+   */
+  defaultMode?: AssistantMode;
   /**
    * Optional host-injected cloud model. When present, the assistant offers a
    * "Cloud" model alongside on-device Nano and can generate real multi-file
@@ -79,7 +92,10 @@ export interface ResolvedConfig {
     preview: { enabled: boolean; ports: number[]; defaultPort: number };
     assistant: boolean;
   };
-  assistant: TerminalAssistantConfig;
+  assistant: TerminalAssistantConfig & {
+    defaultModel: "nano" | "cloud" | "local";
+    defaultMode: AssistantMode;
+  };
 }
 
 const DEFAULT_FONT_PX = 12; // matches the style-guide comp's terminal text scale
@@ -113,8 +129,12 @@ export function normalizeConfig(c: TerminalConfig = {}): ResolvedConfig {
         ports,
         defaultPort: previewObj.defaultPort ?? (ports[0] as number),
       },
-      assistant: f.assistant !== false,
+      assistant: f.assistant !== false && c.assistant?.enabled !== false,
     },
-    assistant: c.assistant ?? {},
+    assistant: {
+      ...(c.assistant ?? {}),
+      defaultModel: c.assistant?.defaultModel ?? "nano",
+      defaultMode: c.assistant?.defaultMode ?? "ask",
+    },
   };
 }

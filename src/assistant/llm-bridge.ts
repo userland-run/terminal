@@ -23,7 +23,13 @@ const DEFAULT_SYSTEM =
 /** OpenAI-ish request body subset we honor. */
 interface ChatCompletionRequest {
   model?: string;
-  messages?: Array<{ role?: string; content?: unknown }>;
+  messages?: Array<{
+    role?: string;
+    content?: unknown;
+    name?: string;
+    tool_call_id?: string;
+    tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }>;
+  }>;
   stream?: boolean;
   max_tokens?: number;
   /** L3 grammar: json_schema responses are engine-GUARANTEED to conform. */
@@ -139,19 +145,40 @@ export function createLlmBridgeHandler(
     }
 
     // Map the OpenAI transcript onto the Qwen template: system messages fold
-    // into the system block, the trailing user message becomes the live turn.
+    // into the system block; assistant tool_calls and tool-role results fold
+    // into the transcript as text so an agent loop (assistant→tool→assistant)
+    // round-trips instead of 400ing.
     const system =
       messages
-        .filter((m) => m.role === "system")
+        .filter((m) => m.role === "system" || m.role === "developer")
         .map((m) => textOf(m.content))
         .join("\n") || DEFAULT_SYSTEM;
-    const turns: ChatTurn[] = messages
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => ({ role: m.role as "user" | "assistant", content: textOf(m.content) }));
-    const last = turns.pop();
-    if (!last || last.role !== "user") {
-      return errorJson(400, "Bad Request", "the last message must have role \"user\"", "invalid_request_error");
+    const turns: ChatTurn[] = [];
+    for (const m of messages) {
+      if (m.role === "user") {
+        turns.push({ role: "user", content: textOf(m.content) });
+      } else if (m.role === "assistant") {
+        let content = textOf(m.content);
+        if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+          const rendered = m.tool_calls
+            .map((c) => `[tool call] ${c.function?.name ?? "?"}(${c.function?.arguments ?? ""})`)
+            .join("\n");
+          content = content ? `${content}\n${rendered}` : rendered;
+        }
+        turns.push({ role: "assistant", content });
+      } else if (m.role === "tool" || m.role === "function") {
+        // The Qwen template has no tool role; present results as user turns.
+        const tag = m.name ? `[tool result from ${m.name}]` : "[tool result]";
+        turns.push({ role: "user", content: `${tag}\n${textOf(m.content)}` });
+      }
     }
+    // The live turn is the trailing user turn (a trailing tool result maps to
+    // user above); a transcript ending in an assistant message asks for a
+    // continuation of that answer.
+    const last =
+      turns.length > 0 && turns[turns.length - 1].role === "user"
+        ? turns.pop()!
+        : { role: "user" as const, content: "Continue." };
 
     const steps = Math.min(Math.max(1, Math.floor(body.max_tokens ?? 512)), Math.max(64, local.maxSeq - 256));
     const budget = Math.max(256, local.maxSeq - steps - 64);

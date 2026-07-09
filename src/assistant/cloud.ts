@@ -18,7 +18,11 @@ import type {
   GeneratedProject,
   ModelAdapter,
   RouteDecision,
+  TurnMetrics,
 } from "./types";
+
+/** Rough token estimate for the tok/s readout (~3.5 chars/token). */
+const estTokens = (s: string) => Math.ceil(s.length / 3.5);
 
 const SYSTEM_PROMPT =
   "You are the assistant inside a browser terminal that runs a real Linux/Node.js " +
@@ -174,10 +178,16 @@ export function createCloudAdapter(config: CloudModelConfig): ModelAdapter {
       return { files, entry, toolchain: obj.toolchain, port: obj.port, notes: obj.notes };
     },
 
-    async chat(userText, history, onDelta): Promise<string> {
+    async chat(userText, history, onDelta, onMetrics, signal): Promise<string> {
       const messages: ChatTurn[] = [...history, { role: "user", content: userText }];
-      const text = await call({ messages });
+      const t0 = performance.now();
+      const text = await call({ messages, signal });
       onDelta?.(text);
+      if (onMetrics) {
+        const elapsedMs = performance.now() - t0;
+        const tokens = estTokens(text);
+        onMetrics({ tokens, elapsedMs, tokPerSec: tokens / (elapsedMs / 1000 || 1) });
+      }
       return text;
     },
   };

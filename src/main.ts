@@ -9,6 +9,7 @@ import uiCss from "./ui-css.generated";
 import type { TermSnapshot } from "@container/nanovm.mjs";
 import { NanoVM } from "@container/nanovm.mjs";
 import { injectScaffold } from "./scaffold";
+import { installSplitLayout } from "./split";
 import { ensureStyles } from "./styles";
 import { setDomRoot, byId, overlayHost, activeEl } from "./dom";
 import { CanvasRenderer, type TermRenderer } from "./renderer";
@@ -35,6 +36,7 @@ import { createBuildTool } from "./assistant/build";
 import { createNanoAdapter } from "./assistant/nano";
 import { createCloudAdapter } from "./assistant/cloud";
 import { createLocalModel } from "./assistant/local";
+import { createOpencodeAdapter } from "./assistant/opencode";
 import { installLlmBridge } from "./assistant/llm-bridge";
 import { AssistantPanel } from "./assistant/panel";
 import { registerWebMcpTools } from "./assistant/webmcp";
@@ -267,6 +269,15 @@ export async function createTerminal(
 
   new ResizeObserver(relayoutSoon).observe(area);
 
+  // Resizable split layout: draggable gutters resize the sidebar + assistant
+  // tracks; this owns the collapse classes + width persistence.
+  const split = installSplitLayout({
+    app: appEl,
+    gutterLeft: byId("gutter-left") as HTMLElement,
+    gutterRight: byId("gutter-right") as HTMLElement,
+    onResize: relayoutSoon,
+  });
+
   // Editor tab (CodeMirror) — the module + its bundle load lazily on first open,
   // so they never weigh on boot. Declared here so the tab-close handler can reach it.
   let editor: import("./editor").EditorTab | null = null;
@@ -343,11 +354,7 @@ export async function createTerminal(
     refit(true); // cell metrics changed — resize the surface even if cols×rows held
   };
 
-  const toggleSidebar = () => {
-    chrome.toggleSidebar();
-    relayoutSoon(); // pane width changed
-  };
-  chrome.onSidebarToggle(toggleSidebar);
+  chrome.onSidebarToggle(() => split.toggleSidebar());
 
   // Render loop — draw is internally damage-gated, so idle frames are cheap.
   let lastSnap: TermSnapshot | null = null;
@@ -451,7 +458,8 @@ export async function createTerminal(
       { id: "font-inc", title: "Increase font size", hint: "⌘+", run: () => setFont(fontPx + 1) },
       { id: "font-dec", title: "Decrease font size", hint: "⌘-", run: () => setFont(fontPx - 1) },
       { id: "font-reset", title: "Reset font size", hint: "⌘0", run: () => setFont(cfg.fontPx) },
-      { id: "sidebar", title: "Toggle sidebar", hint: "⌘B", run: toggleSidebar },
+      { id: "sidebar", title: "Toggle sidebar", hint: "⌘B", run: () => split.toggleSidebar() },
+      { id: "assistant-toggle", title: "Toggle assistant", hint: "⌘J", run: () => split.toggleAssistant() },
     ]);
 
     // Catalog actions (browse / show-installed + one install entry per index app).
@@ -484,7 +492,8 @@ export async function createTerminal(
     if (e.metaKey) {
       const k = e.key.toLowerCase();
       if (k === "k") palette?.toggle();
-      else if (k === "b") toggleSidebar();
+      else if (k === "b") split.toggleSidebar();
+      else if (k === "j") split.toggleAssistant();
       else if (k === "c") copySelection();
       else if (k === "=" || k === "+") setFont(fontPx + 1);
       else if (k === "-") setFont(fontPx - 1);
@@ -557,20 +566,55 @@ export async function createTerminal(
     // WebGPU model at http://nanoinfer.internal/v1/... via /dev/__net__.
     // (typeof guard: tolerate an older vendored container without the hook.)
     if (localModel && typeof vm.setLlmBridge === "function") installLlmBridge(vm, localModel);
+    // opencode-in-the-VM: a real coding agent as a backend. Needs the catalog
+    // (to install the app) and the serve injector (to drive its HTTP API).
+    const opencode =
+      catalog && vm.virtualServer ? createOpencodeAdapter(handle) : undefined;
     // One shared registry drives both the in-page router and WebMCP.
     const tools = [...createVmTools(handle, stdoutBus), createBuildTool(handle, stdoutBus)];
     const host = byId("assistant-host");
-    if (host) new AssistantPanel({ handle, bus: stdoutBus, tools, nano, cloud, local }).mount(host);
+    if (host)
+      new AssistantPanel({
+        handle,
+        bus: stdoutBus,
+        tools,
+        nano,
+        cloud,
+        local,
+        opencode,
+        defaultModel: cfg.assistant.defaultModel,
+        defaultMode: cfg.assistant.defaultMode,
+        onStat: (s) => chrome.setAssistantStat(s),
+      }).mount(host);
     registerWebMcpTools(tools); // expose the same tools to Chrome's built-in agent
     // Dev-only handle for debugging / e2e (stripped from production bundles).
     if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV) {
       (globalThis as Record<string, unknown>).__nanoAssistant = { handle, bus: stdoutBus, tools };
     }
+    // Right-dock assistant pane: top-bar toggle + pane close button + ⌘J.
+    chrome.onAssistantToggle(() => {
+      split.toggleAssistant();
+      chrome.setAssistantPressed(split.isAssistantOpen());
+    });
+    chrome.onAssistantClose(() => {
+      split.toggleAssistant(false);
+      chrome.setAssistantPressed(false);
+    });
+    chrome.setAssistantPressed(split.isAssistantOpen());
     palette?.addCommands([
-      { id: "assistant", title: "Open assistant", hint: "AI", run: () => chrome.showView("assistant") },
+      {
+        id: "assistant",
+        title: "Open assistant",
+        hint: "⌘J",
+        run: () => {
+          split.toggleAssistant(true);
+          chrome.setAssistantPressed(true);
+        },
+      },
     ]);
   } else {
-    chrome.setViewEnabled("assistant", false);
+    chrome.setAssistantEnabled(false);
+    split.toggleAssistant(false);
   }
 
   // Boot the interactive session and keep it alive. The run loop yields to the

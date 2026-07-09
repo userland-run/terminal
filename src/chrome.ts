@@ -22,7 +22,6 @@ export interface ChromeActions {
 }
 
 export class Chrome {
-  private app = el("app");
   private statGrid = el("stat-grid");
   private statCursor = el("stat-cursor");
   private statStatus = el("stat-status");
@@ -30,13 +29,17 @@ export class Chrome {
   private statIps = el("stat-ips");
   private statPort = el("stat-port");
   private statPortSep = el("stat-port-sep");
+  private statAsst = el("stat-asst");
+  private statAsstSep = el("stat-asst-sep");
+  private statAsstModel = el("stat-asst-model");
+  private statAsstTps = el("stat-asst-tps");
   private statCwd = el("stat-cwd");
   private sessionState = el("session-state");
   private cwd = el("cwd");
   private settings = el("settings-popover");
 
   private activeView: string | null = null;
-  private readonly enabledViews = new Set<string>(["files", "catalog", "sessions", "assistant"]);
+  private readonly enabledViews = new Set<string>(["files", "catalog", "sessions"]);
 
   constructor() {
     // VS Code-style activity bar: each icon switches the single active view.
@@ -82,16 +85,22 @@ export class Chrome {
     this.statPortSep.hidden = !on;
     if (on) this.statPort.textContent = `● ${label}`;
   }
+  /** Footer assistant readout while generating: model + tok/s, or null to hide. */
+  setAssistantStat(info: { model: string; toksPerSec: number } | null) {
+    const on = info != null;
+    this.statAsst.hidden = !on;
+    this.statAsstSep.hidden = !on;
+    if (on) {
+      this.statAsstModel.textContent = info.model;
+      this.statAsstTps.textContent = info.toksPerSec.toFixed(1);
+    }
+  }
   setSession(text: string) {
     this.sessionState.textContent = text;
   }
   setCwd(path: string) {
     this.cwd.textContent = path;
     this.statCwd.textContent = path;
-  }
-
-  toggleSidebar() {
-    this.app.classList.toggle("sidebar-collapsed");
   }
 
   /** Show one sidebar view (Files / Catalog / Sessions); hide the rest. */
@@ -117,15 +126,32 @@ export class Chrome {
     if (!enabled && this.activeView === view) this.activeView = null;
   }
 
-  /** Activate the first enabled view (Files first, then Catalog, Sessions, Assistant). */
+  /** Activate the first enabled view (Files first, then Catalog, Sessions). */
   activateDefaultView() {
-    const first = ["files", "catalog", "sessions", "assistant"].find((v) => this.enabledViews.has(v));
+    const first = ["files", "catalog", "sessions"].find((v) => this.enabledViews.has(v));
     if (first) this.showView(first);
   }
 
   /** Wire the ☰ button; caller may also bind a keyboard shortcut. */
   onSidebarToggle(cb: () => void) {
     el("sidebar-toggle").addEventListener("click", cb);
+  }
+
+  /** Wire the top-bar assistant toggle (opens/closes the right pane). */
+  onAssistantToggle(cb: () => void) {
+    el("assistant-toggle").addEventListener("click", cb);
+  }
+  /** Wire the assistant pane's close button. */
+  onAssistantClose(cb: () => void) {
+    el("assistant-close").addEventListener("click", cb);
+  }
+  /** Reflect the open/closed state on the top-bar toggle. */
+  setAssistantPressed(on: boolean) {
+    el("assistant-toggle").setAttribute("aria-pressed", String(on));
+  }
+  /** Hide the assistant toggle entirely (feature disabled). */
+  setAssistantEnabled(on: boolean) {
+    el("assistant-toggle").style.display = on ? "" : "none";
   }
 
   /** Wire the top-bar ⊘/⟳/⚙ actions and the matching settings-popover rows. */

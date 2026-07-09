@@ -9,7 +9,7 @@
 // consumer just drops <nano-terminal> into a page.
 
 import { createTerminal, type TerminalHandle } from "./main";
-import type { TerminalConfig, TerminalFeatureConfig } from "./config";
+import type { TerminalConfig, TerminalFeatureConfig, TerminalAssistantConfig } from "./config";
 
 const FEATURE_KEYS = ["catalog", "palette", "files", "editor", "preview", "assistant"] as const;
 
@@ -46,6 +46,16 @@ export class NanoTerminalElement extends HTMLElement {
     const features: TerminalFeatureConfig = {};
     for (const f of FEATURE_KEYS) if (this.hasAttribute(`no-${f}`)) features[f] = false;
     if (Object.keys(features).length) c.features = features;
+    // Assistant defaults (declarative): default-model / default-mode.
+    const model = str("default-model");
+    const mode = str("default-mode");
+    if (model || mode) {
+      c.assistant = {
+        ...(c.assistant ?? {}),
+        ...(model ? { defaultModel: model as TerminalAssistantConfig["defaultModel"] } : {}),
+        ...(mode ? { defaultMode: mode as TerminalAssistantConfig["defaultMode"] } : {}),
+      };
+    }
     return c;
   }
 }

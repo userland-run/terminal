@@ -17,7 +17,11 @@ import type {
   ModelAdapter,
   ModelAvailabilityState,
   RouteDecision,
+  TurnMetrics,
 } from "./types";
+
+/** Rough token estimate for the tok/s readout (~3.5 chars/token). */
+const estTokens = (s: string) => Math.ceil(s.length / 3.5);
 
 const SYSTEM_PROMPT =
   "You are the assistant inside a browser terminal that runs a real Linux/Node.js " +
@@ -166,15 +170,22 @@ export function createNanoAdapter(): ModelAdapter {
       return { files: [{ path, content }], entry: path, toolchain: "node" };
     },
 
-    async chat(userText, _history, onDelta): Promise<string> {
+    async chat(userText, _history, onDelta, onMetrics, signal): Promise<string> {
       const s = await ensureSession();
       let full = "";
+      const t0 = performance.now();
       try {
-        for await (const chunk of s.promptStreaming(userText)) {
+        for await (const chunk of s.promptStreaming(userText, signal ? { signal } : undefined)) {
           full += chunk;
           onDelta?.(chunk);
+          if (onMetrics) {
+            const elapsedMs = performance.now() - t0;
+            const tokens = estTokens(full);
+            onMetrics({ tokens, elapsedMs, tokPerSec: tokens / (elapsedMs / 1000 || 1) });
+          }
         }
       } catch (e) {
+        if ((e as Error).name === "AbortError") return full; // user hit Stop
         const msg = `⚠️ ${(e as Error).message || "the on-device model errored"}`;
         onDelta?.(msg);
         return msg;

@@ -33,7 +33,9 @@ export interface AssistantPanelOptions {
   nano: ModelAdapter;
   cloud?: ModelAdapter;
   local?: ModelAdapter;
-  /** Model selected on first open ("nano" | "cloud" | "local"). Default "nano". */
+  /** The opencode-in-the-VM agent backend (assistant/opencode.ts). */
+  opencode?: ModelAdapter;
+  /** Model selected on first open ("nano" | "cloud" | "local" | "opencode"). Default "nano". */
   defaultModel?: string;
   /** Permission mode the chat starts in. Default "ask". */
   defaultMode?: AssistantMode;
@@ -55,6 +57,7 @@ export class AssistantPanel {
   private readonly nano: ModelAdapter;
   private readonly cloud?: ModelAdapter;
   private readonly local?: ModelAdapter;
+  private readonly opencode?: ModelAdapter;
   private readonly onStat?: AssistantPanelOptions["onStat"];
   private activeId: string;
   private mode: AssistantMode;
@@ -96,26 +99,34 @@ export class AssistantPanel {
     this.nano = opts.nano;
     this.cloud = opts.cloud;
     this.local = opts.local;
+    this.opencode = opts.opencode;
     this.onStat = opts.onStat;
     const wanted = opts.defaultModel ?? "nano";
     this.activeId =
-      (wanted === "cloud" && !this.cloud) || (wanted === "local" && !this.local) ? "nano" : wanted;
+      (wanted === "cloud" && !this.cloud) ||
+      (wanted === "local" && !this.local) ||
+      (wanted === "opencode" && !this.opencode)
+        ? "nano"
+        : wanted;
     this.mode = opts.defaultMode ?? "ask";
     this.assistant = new Assistant(opts.tools, () => this.activeAdapter());
     this.assistant.setMode(this.mode);
   }
 
-  /** The three model backends, in display order (cloud/local only when wired). */
+  /** The model backends, in display order (cloud/local/opencode only when wired). */
   private models(): { id: string; label: string; adapter: ModelAdapter }[] {
     const out = [{ id: "nano", label: "Gemini Nano", adapter: this.nano }];
     if (this.cloud) out.push({ id: "cloud", label: this.cloud.label || "Cloud", adapter: this.cloud });
     if (this.local) out.push({ id: "local", label: this.local.label || "Local GPU", adapter: this.local });
+    if (this.opencode)
+      out.push({ id: "opencode", label: this.opencode.label || "opencode (in-VM)", adapter: this.opencode });
     return out;
   }
 
   private activeAdapter(): ModelAdapter {
     if (this.activeId === "cloud" && this.cloud) return this.cloud;
     if (this.activeId === "local" && this.local) return this.local;
+    if (this.activeId === "opencode" && this.opencode) return this.opencode;
     return this.nano;
   }
 
@@ -339,12 +350,12 @@ export class AssistantPanel {
     if (info.state === "downloadable") {
       this.banner.append(
         text(
-          adapter.id === "local"
+          adapter.id === "local" || adapter.id === "opencode"
             ? `${info.detail ?? "The local model needs a one-time download"}. `
             : "The on-device model needs a one-time download. ",
         ),
       );
-      const btn = button("asst-dl", "Download model");
+      const btn = button("asst-dl", adapter.id === "opencode" ? "Install & start" : "Download model");
       btn.addEventListener("click", () => void this.download());
       this.banner.append(btn);
       this.setEnabled(false);
@@ -355,6 +366,7 @@ export class AssistantPanel {
       const others = [
         this.cloud && adapter.id !== "cloud" ? "Cloud" : null,
         this.local && adapter.id !== "local" ? this.local.label || "Local GPU" : null,
+        this.opencode && adapter.id !== "opencode" ? this.opencode.label || "opencode (in-VM)" : null,
       ].filter(Boolean);
       const alt = others.length ? ` Switch to ${others.join(" or ")} to use the assistant now.` : "";
       this.banner.append(text(`${adapter.label} unavailable. ${info.detail ?? ""}.${alt}`));

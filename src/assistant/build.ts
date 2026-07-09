@@ -147,6 +147,7 @@ export function createBuildTool(handle: TerminalHandle, bus: StdoutBus): Assista
     name: "build_and_run",
     description:
       "Write a project (one or more files) into the VM, compile it with the right toolchain (Node.js or TypeScript today), run it, and return the output.",
+    kind: "exec",
     inputSchema: {
       type: "object",
       properties: {

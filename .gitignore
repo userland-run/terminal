@@ -19,3 +19,8 @@ public/nano-sw.js
 # dev-deployed nanoinfer engine + model symlink (built from ../nanoinfer)
 public/nanoinfer-engine/
 public/models
+
+# Guest payloads served to the VM — generated/vendored, not source. Their
+# canonical, buildable home is the catalog opencode recipe (recipes/opencode).
+public/opencode/
+public/npm/

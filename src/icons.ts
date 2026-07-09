@@ -22,6 +22,8 @@ import {
   RotateCw,
   ExternalLink,
   PanelLeft,
+  PanelRight,
+  PanelRightClose,
   Ellipsis,
   Globe,
   SquareTerminal,
@@ -30,6 +32,11 @@ import {
   Command,
   Sparkles,
   Send,
+  Square,
+  ChevronDown,
+  Check,
+  X,
+  ShieldCheck,
 } from "lucide";
 
 import { qsa } from "./dom";
@@ -52,6 +59,11 @@ export const I = {
   openExternal: ExternalLink,
   sparkles: Sparkles,
   send: Send,
+  stop: Square,
+  chevronDown: ChevronDown,
+  check: Check,
+  close: X,
+  shield: ShieldCheck,
 };
 
 // Lucide's default stroke (2) reads heavy at chrome sizes; 1.5 is lighter/crisper.
@@ -69,6 +81,8 @@ export function icon(node: IconNode, size = 16, strokeWidth: string | number = S
 // data-lucide placeholder name → icon node. (kebab-case, as written in the scaffold.)
 const CHROME_ICONS: Record<string, IconNode> = {
   "panel-left": PanelLeft,
+  "panel-right": PanelRight,
+  "panel-right-close": PanelRightClose,
   "trash-2": Trash2,
   "rotate-cw": RotateCw,
   ellipsis: Ellipsis,

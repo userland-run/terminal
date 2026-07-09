@@ -13,7 +13,7 @@
 // inherits the scoped custom properties.
 
 export const SCAFFOLD_HTML = `
-<div id="app">
+<div id="app" class="assistant-collapsed">
   <header id="topbar">
     <button id="sidebar-toggle" class="icon-btn" title="Toggle sidebar (⌘B)" aria-label="Toggle sidebar">
       <i data-lucide="panel-left"></i>
@@ -22,6 +22,9 @@ export const SCAFFOLD_HTML = `
     <div class="spacer"></div>
     <div class="badge">NanoVM</div>
     <div class="actions">
+      <button class="icon-btn" id="assistant-toggle" title="Toggle assistant (⌘J)" aria-label="Toggle assistant" aria-pressed="false">
+        <i data-lucide="panel-right"></i>
+      </button>
       <button class="icon-btn" id="act-clear" title="Clear screen" aria-label="Clear screen">
         <i data-lucide="trash-2"></i>
       </button>
@@ -44,9 +47,6 @@ export const SCAFFOLD_HTML = `
       </button>
       <button class="activity-btn" data-view="sessions" title="Sessions" aria-label="Sessions">
         <i data-lucide="square-terminal"></i>
-      </button>
-      <button class="activity-btn" data-view="assistant" title="Assistant" aria-label="Assistant">
-        <i data-lucide="sparkles"></i>
       </button>
     </nav>
     <div class="sidebar-views">
@@ -85,17 +85,10 @@ export const SCAFFOLD_HTML = `
           </ul>
         </div>
       </section>
-      <section class="panel" id="panel-assistant" data-view="assistant">
-        <div class="panel-head">
-          <span class="panel-label">Assistant</span>
-          <span class="panel-hint">on-device AI</span>
-        </div>
-        <div class="panel-body">
-          <div id="assistant-host" class="muted-note">Assistant loads when opened.</div>
-        </div>
-      </section>
     </div>
   </aside>
+
+  <div id="gutter-left" class="gutter" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>
 
   <main id="terminal-area">
     <div class="tabstrip" id="tabstrip" role="tablist">
@@ -120,6 +113,20 @@ export const SCAFFOLD_HTML = `
     </div>
   </main>
 
+  <div id="gutter-right" class="gutter" role="separator" aria-orientation="vertical" aria-label="Resize assistant" tabindex="0"></div>
+
+  <aside id="assistant-pane">
+    <div class="assistant-pane-head">
+      <i data-lucide="sparkles" class="assistant-pane-ico"></i>
+      <span class="panel-label">Assistant</span>
+      <span class="panel-hint">on-device AI</span>
+      <button id="assistant-close" class="icon-btn" title="Close assistant" aria-label="Close assistant">
+        <i data-lucide="panel-right-close"></i>
+      </button>
+    </div>
+    <div id="assistant-host" class="muted-note">Assistant loads when opened.</div>
+  </aside>
+
   <footer id="footer">
     <span class="stat run" id="stat-cwd">/</span>
     <span class="sep">·</span>
@@ -132,6 +139,8 @@ export const SCAFFOLD_HTML = `
     <span class="stat status"><span class="dot"></span><span id="stat-status">booting</span></span>
     <span class="sep port-sep" id="stat-port-sep" hidden>·</span>
     <span class="stat port" id="stat-port" title="a server is listening" hidden></span>
+    <span class="sep asst-sep" id="stat-asst-sep" hidden>·</span>
+    <span class="stat asst" id="stat-asst" title="assistant model · generation speed" hidden><span id="stat-asst-model"></span> <span id="stat-asst-tps">—</span> <span class="lbl">tok/s</span></span>
     <div class="spacer"></div>
     <span class="stat">RV64GC</span>
     <span class="sep">·</span>

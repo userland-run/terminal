@@ -21,6 +21,9 @@ const str = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : 
 const int = (v: unknown): number | undefined =>
   typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : undefined;
 
+/** POSIX single-quote a path/argument so spaces & metacharacters are literal. */
+const shq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+
 /**
  * Ensure a guest binary is present, installing its catalog app on demand. Uses
  * `command -v` so a warm VM never re-installs. Returns true when available.
@@ -63,6 +66,7 @@ export function createVmTools(
     name: "run_shell",
     description:
       "Run a single-line shell command in the terminal and return its output and exit code. Use for listing, inspecting, and running programs. One line only.",
+    kind: "exec",
     inputSchema: {
       type: "object",
       properties: { command: { type: "string", description: "The shell command (single line)." } },
@@ -82,6 +86,7 @@ export function createVmTools(
     name: "list_dir",
     description: "List the entries of a directory in the guest filesystem.",
     readOnly: true,
+    kind: "read",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string", description: "Directory path, e.g. /app." } },
@@ -104,6 +109,7 @@ export function createVmTools(
     name: "read_file",
     description: "Read a text file from the guest filesystem.",
     readOnly: true,
+    kind: "read",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string" } },
@@ -121,6 +127,7 @@ export function createVmTools(
   const writeFile: AssistantTool = {
     name: "write_file",
     description: "Create or overwrite a text file in the guest filesystem.",
+    kind: "edit",
     inputSchema: {
       type: "object",
       properties: {
@@ -143,10 +150,81 @@ export function createVmTools(
     },
   };
 
+  const makeDir: AssistantTool = {
+    name: "make_dir",
+    description: "Create a directory (and any missing parent directories) in the guest filesystem.",
+    kind: "edit",
+    inputSchema: {
+      type: "object",
+      properties: { path: { type: "string", description: "Directory path to create." } },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    async execute(args) {
+      const path = str(args.path);
+      if (!path) return err("make_dir: missing path");
+      const r = await runShellCommand(vm, bus, `mkdir -p ${shq(path)}`, { timeoutMs: 8_000 });
+      handle.refreshFiles();
+      return r.exitCode === 0
+        ? ok(`created ${path}`)
+        : err(r.output || `make_dir: failed (exit ${r.exitCode})`);
+    },
+  };
+
+  const movePath: AssistantTool = {
+    name: "move_path",
+    description: "Move or rename a file or directory in the guest filesystem.",
+    kind: "edit",
+    inputSchema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "Source path." },
+        to: { type: "string", description: "Destination path." },
+      },
+      required: ["from", "to"],
+      additionalProperties: false,
+    },
+    async execute(args) {
+      const from = str(args.from);
+      const to = str(args.to);
+      if (!from || !to) return err("move_path: missing from/to");
+      const r = await runShellCommand(vm, bus, `mv ${shq(from)} ${shq(to)}`, { timeoutMs: 8_000 });
+      handle.refreshFiles();
+      return r.exitCode === 0
+        ? ok(`moved ${from} → ${to}`)
+        : err(r.output || `move_path: failed (exit ${r.exitCode})`);
+    },
+  };
+
+  const deletePath: AssistantTool = {
+    name: "delete_path",
+    description: "Delete a file or directory (recursively) from the guest filesystem.",
+    kind: "edit",
+    inputSchema: {
+      type: "object",
+      properties: { path: { type: "string", description: "Path to delete." } },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    async execute(args) {
+      const path = str(args.path);
+      if (!path) return err("delete_path: missing path");
+      // Guard against catastrophically broad deletes routed from a vague request.
+      if (path === "/" || path === "/*" || path.trim() === "")
+        return err("delete_path: refusing to delete the filesystem root");
+      const r = await runShellCommand(vm, bus, `rm -rf ${shq(path)}`, { timeoutMs: 8_000 });
+      handle.refreshFiles();
+      return r.exitCode === 0
+        ? ok(`deleted ${path}`)
+        : err(r.output || `delete_path: failed (exit ${r.exitCode})`);
+    },
+  };
+
   const runNode: AssistantTool = {
     name: "run_node",
     description:
       "Run a JavaScript file with Node.js (provisions Node from the catalog if needed) and return its output.",
+    kind: "exec",
     inputSchema: {
       type: "object",
       properties: { file: { type: "string", description: "Path to the .js file to run." } },
@@ -173,6 +251,7 @@ export function createVmTools(
     name: "install_app",
     description:
       'Install a catalog app into the guest (e.g. "node", "typescript", "fd@10.2.0"). Makes its binaries runnable.',
+    kind: "exec",
     inputSchema: {
       type: "object",
       properties: { ref: { type: "string", description: 'App reference, "name" or "name@version".' } },
@@ -195,6 +274,7 @@ export function createVmTools(
     name: "serve",
     description:
       "Start a Node HTTP server file in the foreground and reveal it in the Preview tab. Returns once the server is listening (or after a short wait).",
+    kind: "exec",
     inputSchema: {
       type: "object",
       properties: {
@@ -226,6 +306,7 @@ export function createVmTools(
     name: "read_terminal",
     description: "Return the text currently visible on the terminal screen.",
     readOnly: true,
+    kind: "read",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     async execute() {
       return ok(readScreen(handle) || "(screen empty)");
@@ -235,6 +316,7 @@ export function createVmTools(
   const openFile: AssistantTool = {
     name: "open_file",
     description: "Open a guest file in the editor tab for the user to see.",
+    kind: "read",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string" } },
@@ -254,6 +336,9 @@ export function createVmTools(
     listDir,
     readFile,
     writeFile,
+    makeDir,
+    movePath,
+    deletePath,
     runNode,
     installApp,
     serve,

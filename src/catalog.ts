@@ -11,6 +11,32 @@
 import { Catalog } from "@sdk";
 
 const STORE_KEY = "nano:catalog:installed";
+const BASE_KEY = "nano:catalog:base";
+const PUBKEY_KEY = "nano:catalog:pubkey";
+
+/**
+ * Dev override for the catalog origin. Production always uses the default
+ * (jsDelivr + the bundled key); to test locally-built apps before they are
+ * published, point the client at a flat static origin serving
+ * `<base>/index.json` + `<base>/cas/<sha256>`:
+ *   - `?catalog=http://localhost:8788` on the page URL (persisted for the
+ *     session via localStorage), or set localStorage "nano:catalog:base";
+ *   - localStorage "nano:catalog:pubkey" = raw base64 Ed25519 key when the
+ *     local index is signed with a dev key.
+ */
+function catalogOverride(): { cdn?: { baseUrl: string }; publicKeyB64?: string } | undefined {
+  try {
+    const fromUrl = new URLSearchParams(location.search).get("catalog");
+    if (fromUrl) localStorage.setItem(BASE_KEY, fromUrl);
+    const baseUrl = fromUrl || localStorage.getItem(BASE_KEY);
+    if (!baseUrl) return undefined;
+    const publicKeyB64 = localStorage.getItem(PUBKEY_KEY) || undefined;
+    console.warn(`[catalog] dev origin override: ${baseUrl}`);
+    return { cdn: { baseUrl }, publicKeyB64 };
+  } catch {
+    return undefined; // no DOM/storage (tests) → default origin
+  }
+}
 
 function loadRecord(): string[] {
   try {
@@ -82,7 +108,7 @@ const CURATED_BUNDLES: CuratedBundle[] = [
 ];
 
 export class TerminalCatalog {
-  private readonly catalog = new Catalog();
+  private readonly catalog = new Catalog(catalogOverride());
 
   constructor(private readonly vm: any) {}
 
