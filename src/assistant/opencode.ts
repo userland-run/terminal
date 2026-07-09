@@ -145,13 +145,17 @@ export function createOpencodeAdapter(handle: TerminalHandle): ModelAdapter {
         onProgress?.(1);
         return;
       }
-      // node is required (published catalog). ripgrep powers opencode's grep
-      // tools but is not needed to reach listening, so it is best-effort.
+      // node is required (published catalog). ripgrep (grep), fd (glob), and git
+      // (status/diff + gitignore-aware file listing) power opencode's tools and a
+      // full chat turn, but are not needed to reach listening — best-effort.
       if (!(await handle.installApp("node", { quiet: true }))) {
         throw new Error(`install of "node" from the catalog failed`);
       }
-      onProgress?.(0.33);
-      await handle.installApp("ripgrep", { quiet: true }); // best-effort
+      onProgress?.(0.3);
+      // Tool binaries (best-effort; a full agent turn needs git for context build).
+      for (const tool of ["ripgrep", "fd", "git"]) {
+        await handle.installApp(tool, { quiet: true });
+      }
       onProgress?.(0.6);
       // opencode: install from the catalog if the recipe is published, else (dev)
       // seed the tree from the vite-served /opencode/ bundle so the panel works
@@ -218,7 +222,7 @@ export function createOpencodeAdapter(handle: TerminalHandle): ModelAdapter {
       return {
         state: "downloadable",
         detail:
-          "Installs opencode (+ node, ripgrep) from the catalog into the VM and starts its server",
+          "Installs opencode (+ node, ripgrep, fd, git) from the catalog into the VM and starts its server",
       };
     },
 
