@@ -16,7 +16,7 @@ export default defineConfig({
     // The browser NanoVM module lives in the sibling `nano/` repo; the catalog
     // client (Catalog/installer) comes from the built SDK bundle.
     alias: {
-      "@container": fileURLToPath(new URL("../nano/container", import.meta.url)),
+      "@container": fileURLToPath(new URL("../nano/runners/riscv/host", import.meta.url)),
       "@sdk": fileURLToPath(new URL("../sdk/dist/index.js", import.meta.url)),
     },
   },
