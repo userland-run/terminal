@@ -1,8 +1,8 @@
 # Console — the terminal front-end for userland.run
 
-A GPU-composited terminal for [NanoVM](https://github.com/userland-run/nano) — it renders real
-BusyBox / Node.js output from the in-browser RISC-V emulator, and grows into a full mini-IDE
-(file tree, code editor, live preview) when you turn those panels on.
+A GPU-composited terminal for [NanoVM](https://github.com/userland-run/nano), the multi-runner
+platform — it renders real BusyBox / Node.js output from the in-browser RISC-V runner, and grows
+into a full mini-IDE (file tree, code editor, live preview) when you turn those panels on.
 
 > 📚 **Documentation: <https://userland.run/docs/sdk-terminal>** (embedded terminal) and the
 > [SDK reference](https://userland.run/docs/). This repo is the UI; you normally consume it through
@@ -16,7 +16,7 @@ All monospace is **JetBrains Mono**.
 
 The terminal ships as a **Shadow-DOM `<nano-terminal>` custom element** plus an imperative
 `createTerminal()` factory. The ANSI/`vte` parser and cell grid live **inside `nano.wasm`**
-(`nano/src/term.rs`); this package reads the grid out of linear memory and paints it with a
+(`nano/runners/riscv/src/term.rs`); this package reads the grid out of linear memory and paints it with a
 **WebGPU renderer** (with a 2D-canvas fallback when WebGPU is unavailable). A DOM text mirror
 backs accessibility (and makes the screen assertable in tests).
 
@@ -118,7 +118,7 @@ cargo build --release --no-default-features --features busybox --target wasm32-u
 cp target/wasm32-unknown-unknown/release/nanovm.wasm ../terminal/public/nano.wasm
 # (or grab a prebuilt nano.busybox.wasm from a nano release and save it as public/nano.wasm)
 
-# 2. Run the dev server (sends COOP/COEP headers; @container resolves to ../nano/container):
+# 2. Run the dev server (sends COOP/COEP headers; @container resolves to ../nano/runners/riscv/host):
 cd ../terminal
 npm install
 npm run dev
@@ -143,7 +143,7 @@ This is one repo in the **[userland.run](https://userland.run)** workspace:
 
 | Repo | What it is |
 | ---- | ---------- |
-| [nano](https://github.com/userland-run/nano) | The RV64GC → WASM emulator core |
+| [nano](https://github.com/userland-run/nano) | The multi-runner platform — RV64GC emulator core + node/wasm/boa runners |
 | [sdk](https://github.com/userland-run/sdk) | `@userland-run/nano-sdk` — the SDK; re-exports this terminal at `@userland-run/nano-sdk/terminal` |
 | **[terminal](https://github.com/userland-run/terminal)** | `<nano-terminal>` web component — **this repo** |
 | [catalog](https://github.com/userland-run/catalog) | Signed app marketplace (node, typescript, eslint, …) |
