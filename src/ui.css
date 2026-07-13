@@ -417,6 +417,36 @@ kbd {
   color: #d9ccfb;
 }
 
+/* runner-tier facet: chip row (like categories) + per-app tier badge */
+.catalog-runners {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 4px 4px;
+}
+.catalog-tier {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.catalog-row.installed .catalog-tier { opacity: 0.6; }
+
+/* per-tier colors — the badge pill (.catalog-tier) and the facet chip text tint */
+.catalog-tier.catalog-tier-riscv { color: #b9a6ef; background: rgba(169, 132, 245, 0.13); border-color: rgba(169, 132, 245, 0.28); }
+.catalog-tier.catalog-tier-node  { color: #7fca9b; background: rgba(74, 176, 110, 0.13);  border-color: rgba(74, 176, 110, 0.30); }
+.catalog-tier.catalog-tier-wasm  { color: #7fb0e6; background: rgba(90, 150, 230, 0.14);  border-color: rgba(90, 150, 230, 0.32); }
+.catalog-tier.catalog-tier-boa   { color: #e0b070; background: rgba(220, 160, 70, 0.13);  border-color: rgba(220, 160, 70, 0.30); }
+.catalog-chip.catalog-tier-riscv { color: #b9a6ef; }
+.catalog-chip.catalog-tier-node  { color: #7fca9b; }
+.catalog-chip.catalog-tier-wasm  { color: #7fb0e6; }
+.catalog-chip.catalog-tier-boa   { color: #e0b070; }
+
 /* curated bundle rows (two lines: title + description) */
 .catalog-curated { align-items: flex-start; }
 .catalog-meta { flex: 1; min-width: 0; }

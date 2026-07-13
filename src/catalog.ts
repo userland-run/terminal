@@ -174,11 +174,17 @@ export class TerminalCatalog {
   /** Print the signed index, marking what's already installed. */
   async browse(): Promise<void> {
     try {
-      const idx = await this.catalog.index();
+      const idx: any = await this.catalog.index();
       const installed = new Set(loadRecord());
-      this.echo(`\ncatalog (generation ${idx.generation}):\n`);
-      for (const app of Object.keys(idx.apps).sort()) {
-        this.echo(`  ${installed.has(app) ? "✓" : " "} ${app}\n`);
+      const tierOf = (app: string): string => idx.appMeta?.[app]?.tier || "riscv";
+      const apps = Object.keys(idx.apps).sort();
+      // Per-runner tally for the header (e.g. "riscv 30 · wasm 1 · boa 1").
+      const counts: Record<string, number> = {};
+      for (const app of apps) counts[tierOf(app)] = (counts[tierOf(app)] || 0) + 1;
+      const tally = ["riscv", "node", "wasm", "boa"].filter((t) => counts[t]).map((t) => `${t} ${counts[t]}`).join(" · ");
+      this.echo(`\ncatalog (generation ${idx.generation}) — ${tally}:\n`);
+      for (const app of apps) {
+        this.echo(`  ${installed.has(app) ? "✓" : " "} [${tierOf(app).padEnd(5)}] ${app}\n`);
       }
     } catch (e: any) {
       this.echo(`catalog unreachable: ${e?.message ?? e}\n`);
@@ -278,16 +284,51 @@ export class TerminalCatalog {
       list.appendChild(h);
     };
 
-    // --- filter state: active category chip + the search box, combined ---
+    // --- filter state: active runner tier + category chip + search box, combined ---
     let activeCat = "";
+    let activeTier = "";
     const applyFilter = () => {
       const q = (refs.filter?.value || "").trim().toLowerCase();
       for (const el of list.querySelectorAll<HTMLElement>(".catalog-app")) {
         const matchesQ = !q || (el.dataset.search || "").includes(q);
         const matchesCat = !activeCat || (el.dataset.cats || "").split(" ").includes(activeCat);
-        el.style.display = matchesQ && matchesCat ? "" : "none";
+        const matchesTier = !activeTier || el.dataset.tier === activeTier;
+        el.style.display = matchesQ && matchesCat && matchesTier ? "" : "none";
       }
     };
+
+    // --- Runners (execution tier) facet — the primary multi-runner grouping.
+    //     Each app's tier comes from the index's denormalized appMeta (absent ⇒
+    //     "riscv", matching legacy elf-app-only indexes). Only tiers actually
+    //     present get a chip. ---
+    const TIER_ORDER = ["riscv", "node", "wasm", "boa"] as const;
+    const TIER_LABEL: Record<string, string> = { riscv: "RISC-V VM", node: "Node", wasm: "wasm", boa: "Boa" };
+    const tierOf = (appKey: string): string => idx.appMeta?.[appKey]?.tier || "riscv";
+    const presentTiers = new Set<string>(Object.keys(idx.apps).map(tierOf));
+    if (presentTiers.size > 1) {
+      sub("Runners");
+      const runners = document.createElement("div");
+      runners.className = "catalog-runners";
+      list.appendChild(runners);
+      const tierChips: HTMLButtonElement[] = [];
+      const setTier = (t: string) => {
+        activeTier = t;
+        for (const c of tierChips) c.classList.toggle("active", c.dataset.tier === activeTier);
+        applyFilter();
+      };
+      const addTierChip = (t: string, label: string) => {
+        const c = document.createElement("button");
+        c.className = "catalog-chip" + (t ? ` catalog-tier-${t}` : "");
+        c.dataset.tier = t;
+        c.textContent = label;
+        c.addEventListener("click", () => setTier(activeTier === t ? "" : t));
+        tierChips.push(c);
+        runners.appendChild(c);
+      };
+      addTierChip("", "All");
+      for (const t of TIER_ORDER) if (presentTiers.has(t)) addTierChip(t, TIER_LABEL[t]);
+      setTier("");
+    }
 
     // --- Categories (browse facet) — chips populated once manifests resolve ---
     sub("Categories");
@@ -329,7 +370,7 @@ export class TerminalCatalog {
       const at = appKey.lastIndexOf("@");
       const name = at > 0 ? appKey.slice(0, at) : appKey;
       const version = at > 0 ? appKey.slice(at + 1) : "";
-      const row = this.appRow(name, version, appKey, installed.has(appKey), list);
+      const row = this.appRow(name, version, appKey, installed.has(appKey), list, tierOf(appKey));
       appRowByRef.set(appKey, row);
       list.appendChild(row);
     }
@@ -352,25 +393,32 @@ export class TerminalCatalog {
 
   /** An installable app row with determinate install progress (background fill +
    *  % in the version slot). */
-  private appRow(name: string, version: string, ref: string, isInstalled: boolean, list: HTMLElement): HTMLButtonElement {
+  private appRow(name: string, version: string, ref: string, isInstalled: boolean, list: HTMLElement, tier = "riscv"): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.className = "catalog-row catalog-app" + (isInstalled ? " installed" : "");
-    btn.dataset.search = `${name} ${version}`.toLowerCase();
+    // Include the tier in the search haystack so `wasm`/`node`/`boa` typed into
+    // the filter box also narrows by runner.
+    btn.dataset.search = `${name} ${version} ${tier}`.toLowerCase();
     btn.dataset.ref = ref;
     btn.dataset.cats = "";
+    btn.dataset.tier = tier;
     btn.disabled = isInstalled;
-    btn.title = isInstalled ? `${name} — installed` : `install ${name}`;
+    btn.title = isInstalled ? `${name} — installed (${tier})` : `install ${name} (${tier} runner)`;
 
     const nameEl = document.createElement("span");
     nameEl.className = "catalog-name";
     nameEl.textContent = name;
+    // Runner-tier badge — the multi-runner signal on every row.
+    const tierEl = document.createElement("span");
+    tierEl.className = `catalog-tier catalog-tier-${tier}`;
+    tierEl.textContent = tier === "riscv" ? "riscv" : tier;
     const verEl = document.createElement("span");
     verEl.className = "catalog-ver";
     verEl.textContent = version;
     const stateEl = document.createElement("span");
     stateEl.className = "catalog-state";
     stateEl.textContent = isInstalled ? "✓" : "+";
-    btn.append(nameEl, verEl, stateEl);
+    btn.append(nameEl, tierEl, verEl, stateEl);
 
     btn.addEventListener("click", async () => {
       if (btn.disabled) return;
