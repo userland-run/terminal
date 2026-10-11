@@ -11,9 +11,10 @@
 // Permission modes (Claude-Code-style) gate the single tool call: `plan` blocks
 // mutation, `ask` (default) confirms edit/exec/network tools via the UI's
 // approval hook, `acceptEdits` auto-runs edits but confirms exec/network, and
-// `auto` runs everything. A UI without an approval hook (WebMCP, the guest
-// bridge, headless callers) auto-approves — those paths carry their own trust
-// boundary and have no surface to render a prompt.
+// `auto` runs everything. A UI without an approval hook (the guest bridge,
+// headless callers) auto-approves — those paths carry their own trust boundary
+// and have no surface to render a prompt. WebMCP calls bypass this class but are
+// gated by the same policy via AssistantPanel.approveExternal.
 
 import type {
   AgentMessage,

@@ -7,7 +7,9 @@
     "skipLibCheck": true,
     "noEmit": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["@webgpu/types"]
+    "types": ["@webgpu/types"],
+    // Typed view of the SDK's agent subpath (vite aliases it to the built bundle).
+    "paths": { "@sdk/agent": ["../sdk/src/agent/index.ts"] }
   },
   "include": ["src"]
 }

@@ -316,6 +316,7 @@ export function createVmTools(
   const openFile: AssistantTool = {
     name: "open_file",
     description: "Open a guest file in the editor tab for the user to see.",
+    readOnly: true,
     kind: "read",
     inputSchema: {
       type: "object",

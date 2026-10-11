@@ -12,7 +12,7 @@
 
 import type { TerminalHandle } from "../main";
 import { StdoutBus } from "./stdout-bus";
-import { Assistant, type AssistantUI } from "./orchestrator";
+import { Assistant, gateFor, type AssistantUI } from "./orchestrator";
 import { runCodegen, CODEGEN_TEMPLATES, type CodegenUI } from "./codegen";
 import type {
   ApprovalDecision,
@@ -20,6 +20,7 @@ import type {
   AssistantTool,
   ModelAdapter,
   ModelAvailabilityState,
+  ToolKind,
   ToolResult,
   TurnMetrics,
 } from "./types";
@@ -64,6 +65,8 @@ export class AssistantPanel {
   private readonly onStat?: AssistantPanelOptions["onStat"];
   private activeId: string;
   private mode: AssistantMode;
+  /** Tools the user "always allowed" for external (WebMCP) callers this session. */
+  private readonly externalAllow = new Set<string>();
 
   private root!: HTMLElement;
   private banner!: HTMLElement;
@@ -688,6 +691,24 @@ export class AssistantPanel {
     }
     this.reasonEl = null;
     this.reasonBody = null;
+  }
+
+  /**
+   * Gate a tool call from an external agent (WebMCP) with the panel's current
+   * mode: reads and Auto run, Plan blocks, otherwise an approval card is shown.
+   * `onPrompt` fires before the card renders (e.g. to reveal the pane).
+   */
+  async approveExternal(
+    req: { tool: string; kind: ToolKind; args: Record<string, unknown>; summary: string },
+    onPrompt?: () => void,
+  ): Promise<boolean> {
+    const gate = gateFor(this.mode, req.kind);
+    if (gate === "allow" || this.externalAllow.has(req.tool)) return true;
+    if (gate === "block" || !this.log) return false;
+    onPrompt?.();
+    const choice = await this.addApproval({ ...req, tool: `${req.tool} (browser agent)` });
+    if (choice === "always") this.externalAllow.add(req.tool);
+    return choice !== "reject";
   }
 
   /** Render an inline approval card and resolve with the user's choice. */

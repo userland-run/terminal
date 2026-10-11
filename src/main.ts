@@ -794,8 +794,8 @@ export async function mountTerminal(
     // One shared registry drives both the in-page router and WebMCP.
     const tools = [...createVmTools(handle, stdoutBus), createBuildTool(handle, stdoutBus)];
     const host = byId("assistant-host");
-    if (host)
-      new AssistantPanel({
+    const panel = host
+      ? new AssistantPanel({
         dom,
         handle,
         bus: stdoutBus,
@@ -807,8 +807,23 @@ export async function mountTerminal(
         defaultModel: cfg.assistant.defaultModel,
         defaultMode: cfg.assistant.defaultMode,
         onStat: (s) => chrome.setAssistantStat(s),
-      }).mount(host);
-    onDispose(registerWebMcpTools(tools)); // expose the same tools to Chrome's built-in agent
+      })
+      : undefined;
+    if (host) panel?.mount(host);
+    // Expose the same tools to Chrome's built-in agent, gated by the panel's
+    // mode (no panel → nothing can confirm, so mutating calls are rejected).
+    onDispose(
+      registerWebMcpTools(tools, (req) =>
+        panel
+          ? panel.approveExternal(req, () => {
+              if (!split.isAssistantOpen()) {
+                split.toggleAssistant();
+                chrome.setAssistantPressed(true);
+              }
+            })
+          : false,
+      ),
+    );
     // Dev-only handle for debugging / e2e (stripped from production bundles).
     if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV) {
       (globalThis as Record<string, unknown>).__nanoAssistant = { handle, bus: stdoutBus, tools };
