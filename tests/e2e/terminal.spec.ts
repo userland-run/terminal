@@ -77,6 +77,39 @@ test(
 );
 
 test(
+  "a11y mirror lives inside the terminal's shadow root and is removed on dispose",
+  { tag: ["@feat:terminal.a11y.mirror"] },
+  async ({ page }) => {
+    await bootShell(page);
+    const placement = await page.evaluate(() => {
+      const host = document.querySelector("nano-terminal")!;
+      (window as unknown as { __term: Element }).__term = host;
+      return {
+        // document.querySelector does not pierce shadow roots: the mirror must
+        // not leak into the page's light DOM (e.g. appended to <body>).
+        inLight: document.querySelectorAll('pre[aria-label="Terminal screen"], [role="log"][aria-live]').length,
+        inShadow: host.shadowRoot!.querySelectorAll('pre[aria-label="Terminal screen"], [role="log"][aria-live]').length,
+      };
+    });
+    expect(placement).toEqual({ inLight: 0, inShadow: 2 });
+
+    // Removing the element disposes the instance; the mirror goes with it.
+    await page.evaluate(() => document.querySelector("nano-terminal")!.remove());
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const host = (window as unknown as { __term: Element }).__term;
+          return (
+            host.shadowRoot!.querySelectorAll('pre[aria-label="Terminal screen"], [role="log"][aria-live]').length +
+            document.querySelectorAll('pre[aria-label="Terminal screen"], [role="log"][aria-live]').length
+          );
+        }),
+      )
+      .toBe(0);
+  },
+);
+
+test(
   "Cmd-K command palette filters and runs",
   { tag: ["@feat:terminal.palette.command"] },
   async ({ page }) => {
