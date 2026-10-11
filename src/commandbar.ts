@@ -11,22 +11,35 @@ export interface Command {
   run: () => void;
 }
 
-import { byId } from "./dom";
+import type { DomScope } from "./dom";
 
-function el<T extends HTMLElement = HTMLElement>(id: string): T {
-  const node = byId<T>(id);
-  if (!node) throw new Error(`missing #${id}`);
-  return node;
-}
+let paletteSeq = 0;
 
 export class CommandBar {
-  private overlay = el("palette-overlay");
-  private input = el<HTMLInputElement>("palette-input");
-  private list = el<HTMLUListElement>("palette-list");
+  private readonly overlay: HTMLElement;
+  private readonly input: HTMLInputElement;
+  private readonly list: HTMLUListElement;
   private filtered: Command[] = [];
   private sel = 0;
+  /** Focus owner before the palette opened — restored on close. */
+  private returnFocus: HTMLElement | null = null;
+  /** Unique option-id prefix (several terminals may share a document). */
+  private readonly idPrefix = `pl-opt-${++paletteSeq}-`;
 
-  constructor(private commands: Command[]) {
+  constructor(
+    private readonly dom: DomScope,
+    private commands: Command[],
+    /** Is this keystroke the palette-toggle shortcut (⌘K / Ctrl+Shift+K)? */
+    private readonly isToggleKey: (e: KeyboardEvent) => boolean = () => false,
+  ) {
+    const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
+      const node = dom.byId<T>(id);
+      if (!node) throw new Error(`missing #${id}`);
+      return node;
+    };
+    this.overlay = el("palette-overlay");
+    this.input = el<HTMLInputElement>("palette-input");
+    this.list = el<HTMLUListElement>("palette-list");
     this.input.addEventListener("input", () => this.render());
     this.input.addEventListener("keydown", (e) => this.onKey(e));
     // Click outside the panel closes it.
@@ -46,6 +59,9 @@ export class CommandBar {
   }
 
   show() {
+    if (this.open) return;
+    const prev = this.dom.activeEl();
+    this.returnFocus = prev instanceof HTMLElement && prev !== this.input ? prev : null;
     this.overlay.hidden = false;
     this.input.value = "";
     this.render();
@@ -53,7 +69,14 @@ export class CommandBar {
   }
 
   close() {
+    if (!this.open) return;
     this.overlay.hidden = true;
+    this.input.removeAttribute("aria-activedescendant");
+    // Hand focus back to whoever had it (normally the terminal), so typing
+    // after Escape / running a command goes to the shell again.
+    const back = this.returnFocus;
+    this.returnFocus = null;
+    if (back?.isConnected) back.focus();
   }
 
   toggle() {
@@ -61,7 +84,7 @@ export class CommandBar {
   }
 
   private onKey(e: KeyboardEvent) {
-    if (e.key === "Escape") {
+    if (e.key === "Escape" || this.isToggleKey(e)) {
       this.close();
     } else if (e.key === "ArrowDown") {
       this.sel = Math.min(this.sel + 1, this.filtered.length - 1);
@@ -93,6 +116,9 @@ export class CommandBar {
     this.list.replaceChildren(
       ...this.filtered.map((c, i) => {
         const li = document.createElement("li");
+        li.id = this.idPrefix + i;
+        li.setAttribute("role", "option");
+        li.setAttribute("aria-selected", String(i === this.sel));
         if (i === this.sel) li.className = "sel";
         const title = document.createElement("span");
         title.textContent = c.title;
@@ -111,12 +137,22 @@ export class CommandBar {
         return li;
       })
     );
+    this.syncActiveDescendant();
   }
 
   private paintSelection() {
-    [...this.list.children].forEach((li, i) =>
-      li.classList.toggle("sel", i === this.sel)
-    );
+    [...this.list.children].forEach((li, i) => {
+      li.classList.toggle("sel", i === this.sel);
+      li.setAttribute("aria-selected", String(i === this.sel));
+    });
     this.list.children[this.sel]?.scrollIntoView({ block: "nearest" });
+    this.syncActiveDescendant();
+  }
+
+  /** Point the combobox input at the highlighted option (screen readers). */
+  private syncActiveDescendant() {
+    const li = this.list.children[this.sel];
+    if (li) this.input.setAttribute("aria-activedescendant", li.id);
+    else this.input.removeAttribute("aria-activedescendant");
   }
 }

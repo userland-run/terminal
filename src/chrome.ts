@@ -7,13 +7,7 @@
 // semantic calls. Layout + tokens follow style-guide/terminal/Userland
 // Terminal.dc.html.
 
-import { byId, qs, qsa, domRoot } from "./dom";
-
-function el<T extends HTMLElement = HTMLElement>(id: string): T {
-  const node = byId<T>(id);
-  if (!node) throw new Error(`missing #${id}`);
-  return node;
-}
+import type { DomScope } from "./dom";
 
 export interface ChromeActions {
   onClear: () => void;
@@ -22,25 +16,39 @@ export interface ChromeActions {
 }
 
 export class Chrome {
-  private app = el("app");
-  private statGrid = el("stat-grid");
-  private statCursor = el("stat-cursor");
-  private statStatus = el("stat-status");
-  private statUptime = el("stat-uptime");
-  private statIps = el("stat-ips");
-  private statPort = el("stat-port");
-  private statPortSep = el("stat-port-sep");
-  private statCwd = el("stat-cwd");
-  private sessionState = el("session-state");
-  private cwd = el("cwd");
-  private settings = el("settings-popover");
+  private readonly app: HTMLElement;
+  private readonly statGrid: HTMLElement;
+  private readonly statCursor: HTMLElement;
+  private readonly statStatus: HTMLElement;
+  private readonly statUptime: HTMLElement;
+  private readonly statIps: HTMLElement;
+  private readonly statPort: HTMLElement;
+  private readonly statPortSep: HTMLElement;
+  private readonly statCwd: HTMLElement;
+  private readonly sessionState: HTMLElement;
+  private readonly cwd: HTMLElement;
+  private readonly settings: HTMLElement;
 
+  private baseStatus = "";
+  private flashTimer = 0;
   private activeView: string | null = null;
   private readonly enabledViews = new Set<string>(["files", "catalog", "sessions", "assistant"]);
 
-  constructor() {
+  constructor(private readonly dom: DomScope) {
+    this.app = this.el("app");
+    this.statGrid = this.el("stat-grid");
+    this.statCursor = this.el("stat-cursor");
+    this.statStatus = this.el("stat-status");
+    this.statUptime = this.el("stat-uptime");
+    this.statIps = this.el("stat-ips");
+    this.statPort = this.el("stat-port");
+    this.statPortSep = this.el("stat-port-sep");
+    this.statCwd = this.el("stat-cwd");
+    this.sessionState = this.el("session-state");
+    this.cwd = this.el("cwd");
+    this.settings = this.el("settings-popover");
     // VS Code-style activity bar: each icon switches the single active view.
-    for (const btn of qsa<HTMLElement>(".activity-btn")) {
+    for (const btn of this.dom.qsa<HTMLElement>(".activity-btn")) {
       btn.addEventListener("click", () => {
         const v = btn.dataset.view;
         if (v) this.showView(v);
@@ -49,14 +57,29 @@ export class Chrome {
     // Dismiss the settings popover on outside click / Escape. Listen on the
     // scoped root: under shadow DOM, document-level events are retargeted to the
     // host, so `e.target` would never be the real (in-shadow) popover/button.
-    domRoot().addEventListener("mousedown", (e) => {
-      if (this.settings.hidden) return;
-      const t = (e as MouseEvent).target as Node;
-      if (!this.settings.contains(t) && !el("act-settings").contains(t)) this.hideSettings();
-    });
-    domRoot().addEventListener("keydown", (e) => {
-      if ((e as KeyboardEvent).key === "Escape" && !this.settings.hidden) this.hideSettings();
-    });
+    const { signal } = dom;
+    dom.root.addEventListener(
+      "mousedown",
+      (e) => {
+        if (this.settings.hidden) return;
+        const t = (e as MouseEvent).target as Node;
+        if (!this.settings.contains(t) && !this.el("act-settings").contains(t)) this.hideSettings();
+      },
+      { signal },
+    );
+    dom.root.addEventListener(
+      "keydown",
+      (e) => {
+        if ((e as KeyboardEvent).key === "Escape" && !this.settings.hidden) this.hideSettings();
+      },
+      { signal },
+    );
+  }
+
+  private el<T extends HTMLElement = HTMLElement>(id: string): T {
+    const node = this.dom.byId<T>(id);
+    if (!node) throw new Error(`missing #${id}`);
+    return node;
   }
 
   setGrid(cols: number, rows: number) {
@@ -65,8 +88,26 @@ export class Chrome {
   setCursor(row: number, col: number) {
     this.statCursor.textContent = `ln ${row + 1}:${col + 1}`;
   }
+  /** Set the persistent footer status ("live", "↑ 3/120", …). A transient
+   *  {@link flashStatus} in progress keeps showing until it expires. */
   setStatus(text: string) {
+    this.baseStatus = text;
+    if (!this.flashTimer) this.statStatus.textContent = text;
+  }
+  /** Show a short-lived status ("copied", "saved"), then revert to the persistent
+   *  one. One timer: a newer flash replaces an older one instead of racing it. */
+  flashStatus(text: string, ms = 1400) {
+    if (this.flashTimer) clearTimeout(this.flashTimer);
     this.statStatus.textContent = text;
+    this.flashTimer = window.setTimeout(() => {
+      this.flashTimer = 0;
+      this.statStatus.textContent = this.baseStatus;
+    }, ms);
+  }
+  /** Cancel any pending flash timer (teardown). */
+  dispose() {
+    if (this.flashTimer) clearTimeout(this.flashTimer);
+    this.flashTimer = 0;
   }
   setUptime(text: string) {
     this.statUptime.textContent = text;
@@ -98,10 +139,10 @@ export class Chrome {
   showView(view: string) {
     if (!this.enabledViews.has(view)) return;
     this.activeView = view;
-    for (const p of qsa<HTMLElement>(".sidebar-views .panel")) {
+    for (const p of this.dom.qsa<HTMLElement>(".sidebar-views .panel")) {
       p.classList.toggle("active", p.dataset.view === view);
     }
-    for (const b of qsa<HTMLElement>(".activity-btn")) {
+    for (const b of this.dom.qsa<HTMLElement>(".activity-btn")) {
       const on = b.dataset.view === view;
       b.classList.toggle("active", on);
       b.setAttribute("aria-pressed", String(on));
@@ -112,7 +153,7 @@ export class Chrome {
   setViewEnabled(view: string, enabled: boolean) {
     if (enabled) this.enabledViews.add(view);
     else this.enabledViews.delete(view);
-    const btn = qs<HTMLElement>(`.activity-btn[data-view="${view}"]`);
+    const btn = this.dom.qs<HTMLElement>(`.activity-btn[data-view="${view}"]`);
     if (btn) btn.style.display = enabled ? "" : "none";
     if (!enabled && this.activeView === view) this.activeView = null;
   }
@@ -125,19 +166,19 @@ export class Chrome {
 
   /** Wire the ☰ button; caller may also bind a keyboard shortcut. */
   onSidebarToggle(cb: () => void) {
-    el("sidebar-toggle").addEventListener("click", cb);
+    this.el("sidebar-toggle").addEventListener("click", cb);
   }
 
   /** Wire the top-bar ⊘/⟳/⚙ actions and the matching settings-popover rows. */
   bindActions(a: ChromeActions) {
-    el("act-clear").addEventListener("click", a.onClear);
-    el("act-restart").addEventListener("click", a.onRestart);
-    el("act-settings").addEventListener("click", (e) => {
+    this.el("act-clear").addEventListener("click", a.onClear);
+    this.el("act-restart").addEventListener("click", a.onRestart);
+    this.el("act-settings").addEventListener("click", (e) => {
       e.stopPropagation();
       this.toggleSettings();
     });
     const row = (id: string, cb: () => void) =>
-      el(id).addEventListener("click", () => {
+      this.el(id).addEventListener("click", () => {
         this.hideSettings();
         cb();
       });

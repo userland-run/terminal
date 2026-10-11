@@ -85,6 +85,9 @@ test(
     const items = page.locator("#palette-list li");
 
     // Open with Cmd-K (main.ts intercepts metaKey+k and never forwards it).
+    // Keyboard input is scoped to the focused terminal (an embedded element must
+    // not capture the host page's keys), so focus it first.
+    await page.locator("#screen").click();
     await page.keyboard.press("Meta+k");
     await expect(overlay).toBeVisible();
     const total = await items.count();

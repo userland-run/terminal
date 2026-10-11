@@ -91,6 +91,8 @@ declare module "@container/nanovm.mjs" {
         | null,
     ): void;
     writeStdin(data: Uint8Array | string): void;
+    /** Tear the VM down (exit the guest, drop memory). Optional: older vendored builds lack it. */
+    destroy?(): void;
     setInteractiveStdin(on?: boolean): void;
     closeStdin(): void;
     cancelRun(): void;

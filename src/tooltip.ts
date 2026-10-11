@@ -7,20 +7,20 @@
 // every button gets a tooltip for free — including dynamically-created ones,
 // via event delegation on the document.
 
-import { domRoot, overlayHost } from "./dom";
+import type { DomScope } from "./dom";
 
 const SHOW_DELAY = 350;
 
-let installed = false;
-
-export function installTooltips(): void {
-  if (installed) return;
-  installed = true;
+/** Install the tooltip for one terminal instance. Listeners are tied to the
+ *  scope's teardown signal; the tip element lives inside the instance's overlay. */
+export function installTooltips(dom: DomScope): void {
+  const { signal } = dom;
+  if (dom.overlay.querySelector(":scope > #tooltip")) return; // already installed here
 
   const tip = document.createElement("div");
   tip.id = "tooltip";
   tip.setAttribute("role", "tooltip");
-  overlayHost().appendChild(tip);
+  dom.overlay.appendChild(tip);
 
   let current: HTMLElement | null = null;
   let timer = 0;
@@ -82,22 +82,38 @@ export function installTooltips(): void {
 
   // Delegated on the scoped root: under shadow DOM, document-level events are
   // retargeted to the host, so `e.target` here would never be the real control.
-  const r = domRoot();
-  r.addEventListener("pointerover", (e) => {
-    const el = ((e as PointerEvent).target as HTMLElement | null)?.closest<HTMLElement>("[title], [data-tip]");
-    onEnter(el ?? null, false);
-  });
-  r.addEventListener("pointerout", (e) => {
-    const el = ((e as PointerEvent).target as HTMLElement | null)?.closest<HTMLElement>("[data-tip]");
-    if (el && el === current) hide();
-  });
+  const r = dom.root;
+  r.addEventListener(
+    "pointerover",
+    (e) => {
+      const el = ((e as PointerEvent).target as HTMLElement | null)?.closest<HTMLElement>("[title], [data-tip]");
+      onEnter(el ?? null, false);
+    },
+    { signal },
+  );
+  r.addEventListener(
+    "pointerout",
+    (e) => {
+      const el = ((e as PointerEvent).target as HTMLElement | null)?.closest<HTMLElement>("[data-tip]");
+      if (el && el === current) hide();
+    },
+    { signal },
+  );
   // Dismiss aggressively so a tooltip never lingers.
-  r.addEventListener("pointerdown", hide, true);
-  window.addEventListener("scroll", hide, true);
-  window.addEventListener("blur", hide);
+  r.addEventListener("pointerdown", hide, { capture: true, signal });
+  window.addEventListener("scroll", hide, { capture: true, signal });
+  window.addEventListener("blur", hide, { signal });
   // Keyboard focus shows the tooltip immediately (a11y).
-  r.addEventListener("focusin", (e) => {
-    onEnter(((e as FocusEvent).target as HTMLElement | null)?.closest<HTMLElement>("[title], [data-tip]") ?? null, true);
+  r.addEventListener(
+    "focusin",
+    (e) => {
+      onEnter(((e as FocusEvent).target as HTMLElement | null)?.closest<HTMLElement>("[title], [data-tip]") ?? null, true);
+    },
+    { signal },
+  );
+  r.addEventListener("focusout", hide, { signal });
+  signal.addEventListener("abort", () => {
+    if (timer) clearTimeout(timer);
+    tip.remove();
   });
-  r.addEventListener("focusout", hide);
 }

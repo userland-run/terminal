@@ -23,7 +23,7 @@ export default defineConfig({
     baseURL: "http://localhost:4173",
     trace: "retain-on-failure",
   },
-  // `npm run build` also pulls in the sibling `../nano/container` via the
+  // `npm run build` also pulls in the sibling `../nano/runners/riscv/host` via the
   // @container vite alias, so that checkout must exist (CI handles this with a
   // second actions/checkout — see .github/workflows/e2e.yml).
   webServer: {

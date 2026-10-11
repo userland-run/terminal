@@ -11,6 +11,10 @@ export interface FilesPanelOptions {
   onOpenFile?: (path: string) => void;
   /** Local FS mapping (File System Access API); enables the mount buttons. */
   localMounts?: LocalMounts;
+  /** A path (file or directory) was renamed — e.g. so the Editor follows it. */
+  onRenamed?: (from: string, to: string) => void;
+  /** A path (file or directory) was deleted. */
+  onDeleted?: (path: string) => void;
 }
 
 const joinPath = (dir: string, name: string): string =>
@@ -244,9 +248,12 @@ export class FilesPanel {
       const name = input.value.trim();
       if (save && name && !name.includes("/") && name !== entry.name) {
         const dir = path.slice(0, path.lastIndexOf("/")) || "/";
+        const to = joinPath(dir, name);
         try {
-          this.vm.renamePath(path, joinPath(dir, name));
-          if (this.selected === path) this.selected = joinPath(dir, name);
+          this.vm.renamePath(path, to);
+          if (this.selected === path) this.selected = to;
+          else if (this.selected?.startsWith(path + "/")) this.selected = to + this.selected.slice(path.length);
+          this.opts.onRenamed?.(path, to);
         } catch (err) {
           console.warn("[files] rename failed:", err);
         }
@@ -268,8 +275,9 @@ export class FilesPanel {
       this.clearPendingDelete();
       try {
         this.vm.removePath(path);
-        if (this.selected === path) this.selected = null;
+        if (this.selected === path || this.selected?.startsWith(path + "/")) this.selected = null;
         this.expanded.delete(path);
+        this.opts.onDeleted?.(path);
       } catch (err) {
         console.warn("[files] delete failed:", err);
       }

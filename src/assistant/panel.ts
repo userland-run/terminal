@@ -14,8 +14,11 @@ import { Assistant, type AssistantUI } from "./orchestrator";
 import { runCodegen, CODEGEN_TEMPLATES, type CodegenUI } from "./codegen";
 import type { AssistantTool, ModelAdapter, ToolResult } from "./types";
 import { icon, I } from "../icons";
+import type { DomScope } from "../dom";
 
 export interface AssistantPanelOptions {
+  /** The owning terminal instance's DOM scope (root + teardown signal). */
+  dom: DomScope;
   handle: TerminalHandle;
   bus: StdoutBus;
   tools: AssistantTool[];
@@ -25,6 +28,7 @@ export interface AssistantPanelOptions {
 }
 
 export class AssistantPanel {
+  private readonly dom: DomScope;
   private readonly handle: TerminalHandle;
   private readonly bus: StdoutBus;
   private readonly assistant: Assistant;
@@ -44,6 +48,7 @@ export class AssistantPanel {
   private busy = false;
 
   constructor(opts: AssistantPanelOptions) {
+    this.dom = opts.dom;
     this.handle = opts.handle;
     this.bus = opts.bus;
     this.nano = opts.nano;

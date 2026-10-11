@@ -8,7 +8,7 @@
 // stylesheet into that shadow root. This is the shape the SDK re-exports so a
 // consumer just drops <nano-terminal> into a page.
 
-import { createTerminal, type TerminalHandle } from "./main";
+import { mountTerminal, type TerminalHandle } from "./main";
 import type { TerminalConfig, TerminalFeatureConfig } from "./config";
 
 const FEATURE_KEYS = ["catalog", "palette", "files", "editor", "preview", "assistant"] as const;
@@ -16,6 +16,9 @@ const FEATURE_KEYS = ["catalog", "palette", "files", "editor", "preview", "assis
 export class NanoTerminalElement extends HTMLElement {
   private booted = false;
   private handle: Promise<TerminalHandle> | null = null;
+  /** The live handle object; its dispose() is wired synchronously at boot start,
+   *  so a disconnect mid-boot can still tear the instance down. */
+  private live: TerminalHandle | null = null;
   /** Programmatic config; merged over (and overriding) attribute-derived config. */
   config: TerminalConfig = {};
 
@@ -25,11 +28,31 @@ export class NanoTerminalElement extends HTMLElement {
   }
 
   connectedCallback(): void {
-    if (this.booted) return; // boot once; re-attaching keeps the same VM
+    if (this.booted) return; // boot once; a DOM move (disconnect+reconnect) keeps the VM
     this.booted = true;
     const shadow = this.shadowRoot ?? this.attachShadow({ mode: "open" });
     const cfg: TerminalConfig = { ...this.attrConfig(), ...this.config };
-    this.handle = createTerminal(shadow, cfg);
+    const live = {} as TerminalHandle;
+    this.live = live;
+    this.handle = mountTerminal(shadow, cfg, live);
+  }
+
+  disconnectedCallback(): void {
+    // A DOM move fires disconnect then connect synchronously — only tear down if
+    // the element is still detached once the current task's microtasks settle.
+    queueMicrotask(() => {
+      if (this.isConnected || !this.live) return;
+      this.dispose();
+    });
+  }
+
+  /** Tear the terminal down now (VM, render loop, timers, listeners). A later
+   *  re-insert boots a fresh instance. */
+  dispose(): void {
+    this.live?.dispose?.();
+    this.live = null;
+    this.handle = null;
+    this.booted = false;
   }
 
   /** Build a TerminalConfig from declarative attributes (so it works from plain

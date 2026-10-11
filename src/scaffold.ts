@@ -99,24 +99,28 @@ export const SCAFFOLD_HTML = `
 
   <main id="terminal-area">
     <div class="tabstrip" id="tabstrip" role="tablist">
-      <button class="tab active" data-tab="terminal" role="tab" aria-selected="true">
+      <button class="tab active" data-tab="terminal" id="tab-terminal" role="tab" aria-selected="true" aria-controls="term-pane">
         <i data-lucide="square-terminal"></i>
         <span>Terminal</span>
       </button>
-      <button class="tab" data-tab="editor" role="tab" aria-selected="false" hidden>
-        <i data-lucide="code"></i>
-        <span class="tab-label">Editor</span>
-        <span class="tab-close" data-close="editor" title="Close" aria-label="Close editor">×</span>
-      </button>
-      <button class="tab" data-tab="preview" role="tab" aria-selected="false" hidden>
+      <!-- Closable tab: a group holding the tab button and a sibling close button
+           (a button can't contain another interactive element). -->
+      <div class="tab tab-group" data-tab="editor" role="presentation" hidden>
+        <button class="tab-btn" id="tab-editor" role="tab" aria-selected="false" aria-controls="editor-host">
+          <i data-lucide="code"></i>
+          <span class="tab-label">Editor</span>
+        </button>
+        <button class="tab-close" data-close="editor" title="Close editor" aria-label="Close editor">×</button>
+      </div>
+      <button class="tab" data-tab="preview" id="tab-preview" role="tab" aria-selected="false" aria-controls="preview-host" hidden>
         <i data-lucide="globe"></i>
         <span>Preview</span>
       </button>
     </div>
     <div class="tab-host">
-      <div class="tab-pane active" data-tab="terminal" id="term-pane"><canvas id="screen"></canvas></div>
-      <div class="tab-pane" data-tab="editor" id="editor-host"></div>
-      <div class="tab-pane" data-tab="preview" id="preview-host"></div>
+      <div class="tab-pane active" data-tab="terminal" id="term-pane" role="tabpanel" aria-labelledby="tab-terminal"><canvas id="screen" aria-hidden="true"></canvas></div>
+      <div class="tab-pane" data-tab="editor" id="editor-host" role="tabpanel" aria-labelledby="tab-editor"></div>
+      <div class="tab-pane" data-tab="preview" id="preview-host" role="tabpanel" aria-labelledby="tab-preview"></div>
     </div>
   </main>
 
@@ -143,7 +147,7 @@ export const SCAFFOLD_HTML = `
     <div class="settings-label">Session</div>
     <button class="settings-row" id="set-clear">
       <i data-lucide="trash-2"></i>
-      Clear scrollback
+      Clear screen
     </button>
     <button class="settings-row" id="set-restart">
       <i data-lucide="rotate-cw"></i>
@@ -160,8 +164,9 @@ export const SCAFFOLD_HTML = `
   <!-- Cmd-K command palette (hidden until invoked). -->
   <div id="palette-overlay" hidden>
     <div id="palette" role="dialog" aria-label="Command palette">
-      <input id="palette-input" type="text" placeholder="Type a command…" autocomplete="off" spellcheck="false" />
-      <ul id="palette-list"></ul>
+      <input id="palette-input" type="text" placeholder="Type a command…" autocomplete="off" spellcheck="false"
+        role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list" aria-label="Command" />
+      <ul id="palette-list" role="listbox" aria-label="Commands"></ul>
     </div>
   </div>
 </div>`;
@@ -171,8 +176,14 @@ export const SCAFFOLD_HTML = `
  * already exists, e.g. the standalone index.html shipped it). Returns the
  * `#app` root element.
  */
+export function existingScaffold(host: Element | ShadowRoot): HTMLElement | null {
+  // The host may itself be #app (createTerminal("#app") on a page that ships it).
+  if (host instanceof HTMLElement && host.id === "app") return host;
+  return host.querySelector<HTMLElement>("#app");
+}
+
 export function injectScaffold(host: Element | ShadowRoot): HTMLElement {
-  const existing = host.querySelector<HTMLElement>("#app");
+  const existing = existingScaffold(host);
   if (existing) return existing;
   // <template> parses the markup once; works for both Element and ShadowRoot
   // (ShadowRoot has no insertAdjacentHTML).

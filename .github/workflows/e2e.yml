@@ -20,13 +20,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # The terminal checkout. Place it under terminal/ so the sibling nano/
-      # checkout below resolves the @container vite alias (../nano/container).
+      # checkout below resolves the @container vite alias (../nano/runners/riscv/host).
       - name: Checkout terminal
         uses: actions/checkout@v4
         with:
           path: terminal
 
-      # `npm run build` imports @container → ../nano/container (see vite.config.ts),
+      # `npm run build` imports @container → ../nano/runners/riscv/host (see vite.config.ts),
       # so the build needs the sibling nano repo checked out next to terminal/.
       - name: Checkout nano (sibling, for the @container alias)
         uses: actions/checkout@v4

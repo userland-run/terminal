@@ -3,6 +3,7 @@
 // Part of the userland.run terminal; dual-licensed - see LICENSE.md.
 
 import type { TermSnapshot } from "@container/nanovm.mjs";
+import { cellView, rowText } from "./cells";
 
 export interface CellPos {
   row: number;
@@ -50,17 +51,48 @@ export function ordered(sel: Selection): { start: CellPos; end: CellPos } {
  */
 export function extractText(snap: TermSnapshot, sel: Selection): string {
   const { start, end } = ordered(sel);
-  const dv = new DataView(snap.cells.buffer, snap.cells.byteOffset, snap.cells.byteLength);
+  const dv = cellView(snap);
   const lines: string[] = [];
   for (let row = start.row; row <= end.row; row++) {
     const cStart = row === start.row ? start.col : 0;
     const cEnd = row === end.row ? end.col : snap.cols - 1;
-    let line = "";
-    for (let col = cStart; col <= cEnd; col++) {
-      const ch = dv.getUint32((row * snap.cols + col) * 8, true);
-      line += ch && ch !== 0x20 ? String.fromCodePoint(ch) : " ";
-    }
-    lines.push(line.replace(/\s+$/, ""));
+    lines.push(rowText(snap, row, cStart, cEnd, dv));
   }
   return lines.join("\n");
+}
+
+// --- buffer coordinates ------------------------------------------------------
+//
+// A drag selection is anchored to *content*, not to the screen: while the user
+// scrolls (or output scrolls the screen) mid-drag, the anchor must stay on the
+// line it was placed on. Buffer rows count from the oldest scrollback line:
+//   bufferRow = viewportRow - scrollOffset + scrollMax
+// (scrollMax = scrollback depth). Once the scrollback ring is full, evictions no
+// longer grow scrollMax, so very long-running output can still drift a selection
+// — acceptable for a drag gesture.
+
+/** Viewport cell → buffer cell, given the snapshot's scroll position. */
+export function toBuffer(p: CellPos, scrollOffset: number, scrollMax: number): CellPos {
+  return { row: p.row - scrollOffset + scrollMax, col: p.col };
+}
+
+/**
+ * Project a buffer-coordinate selection onto the current viewport (clipped to
+ * the visible rows), or null if none of it is visible.
+ */
+export function toViewport(
+  sel: Selection,
+  scrollOffset: number,
+  scrollMax: number,
+  rows: number,
+  cols: number,
+): Selection | null {
+  const { start, end } = ordered(sel);
+  const shift = scrollOffset - scrollMax;
+  let s = { row: start.row + shift, col: start.col };
+  let e = { row: end.row + shift, col: end.col };
+  if (e.row < 0 || s.row > rows - 1) return null;
+  if (s.row < 0) s = { row: 0, col: 0 };
+  if (e.row > rows - 1) e = { row: rows - 1, col: cols - 1 };
+  return { anchor: s, head: e };
 }
