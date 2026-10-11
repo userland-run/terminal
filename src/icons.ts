@@ -39,7 +39,7 @@ import {
   ShieldCheck,
 } from "lucide";
 
-import { qsa } from "./dom";
+import type { DomScope } from "./dom";
 
 export type { IconNode };
 
@@ -101,8 +101,8 @@ const CHROME_ICONS: Record<string, IconNode> = {
  * it works inside a shadow root) — replaces lucide's own `createIcons`, which
  * only scans `document`.
  */
-export function renderChromeIcons(): void {
-  for (const ph of qsa<HTMLElement>("[data-lucide]")) {
+export function renderChromeIcons(dom: DomScope): void {
+  for (const ph of dom.qsa<HTMLElement>("[data-lucide]")) {
     const name = ph.getAttribute("data-lucide");
     const node = name ? CHROME_ICONS[name] : undefined;
     if (!node) continue;

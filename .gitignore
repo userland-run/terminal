@@ -13,7 +13,8 @@ public/nano.wasm
 /blob-report/
 /playwright/.cache/
 
-# Synced from the SDK by the predev/prebuild sync-sw script — not checked in.
+# Synced from the SDK (../sdk/static) by scripts/sync-sw.mjs on predev/prebuild —
+# not checked in; the script fails the build if neither ../sdk nor a synced copy exists.
 public/nano-sw.js
 
 # dev-deployed nanoinfer engine + model symlink (built from ../nanoinfer)

@@ -24,9 +24,11 @@ import type {
   TurnMetrics,
 } from "./types";
 import { icon, I } from "../icons";
-import { domRoot } from "../dom";
+import type { DomScope } from "../dom";
 
 export interface AssistantPanelOptions {
+  /** The owning terminal instance's DOM scope (root + teardown signal). */
+  dom: DomScope;
   handle: TerminalHandle;
   bus: StdoutBus;
   tools: AssistantTool[];
@@ -51,6 +53,7 @@ const MODES: { id: AssistantMode; label: string }[] = [
 ];
 
 export class AssistantPanel {
+  private readonly dom: DomScope;
   private readonly handle: TerminalHandle;
   private readonly bus: StdoutBus;
   private readonly assistant: Assistant;
@@ -94,6 +97,7 @@ export class AssistantPanel {
   private activeTool: HTMLElement | null = null;
 
   constructor(opts: AssistantPanelOptions) {
+    this.dom = opts.dom;
     this.handle = opts.handle;
     this.bus = opts.bus;
     this.nano = opts.nano;
@@ -158,10 +162,14 @@ export class AssistantPanel {
 
     // Close the model menu on an outside click (mousedown on the scoped root:
     // under shadow DOM document events are retargeted to the host).
-    domRoot().addEventListener("mousedown", (e) => {
-      if (this.modelMenu.hidden) return;
-      if (!this.modelWrap.contains(e.target as Node)) this.toggleModelMenu(false);
-    });
+    this.dom.root.addEventListener(
+      "mousedown",
+      (e) => {
+        if (this.modelMenu.hidden) return;
+        if (!this.modelWrap.contains(e.target as Node)) this.toggleModelMenu(false);
+      },
+      { signal: this.dom.signal },
+    );
 
     this.setMode(this.mode);
     this.renderModelButton();

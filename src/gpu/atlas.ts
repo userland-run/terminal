@@ -32,6 +32,12 @@ export class GlyphAtlas {
   private cols = 0;
   private capacity = 0;
   private dirty = true;
+  /**
+   * Bumped whenever cached slots are invalidated (configure, or eviction when
+   * full). A renderer that built instances against an older generation must
+   * rebuild them — their slot coordinates may now hold different glyphs.
+   */
+  generation = 0;
 
   // Slot geometry in device px, plus the device-px font size and baseline.
   private slotW = 0;
@@ -69,21 +75,31 @@ export class GlyphAtlas {
     this.slotV = slotH / ATLAS_H;
     this.cols = Math.max(1, Math.floor(ATLAS_W / slotW));
     this.capacity = this.cols * Math.max(1, Math.floor(ATLAS_H / slotH));
+    this.reset();
+  }
+
+  /** Drop every cached glyph (they re-rasterise on demand). */
+  private reset() {
     this.slots.clear();
     this.next = 0;
     this.ctx.clearRect(0, 0, ATLAS_W, ATLAS_H);
     this.dirty = true;
+    this.generation++;
   }
 
-  /** Atlas slot for a glyph, rasterising on first use. null if it cannot fit. */
+  /**
+   * Atlas slot for a glyph, rasterising on first use. When the atlas is full it
+   * is cleared and rebuilt from the glyphs actually in use (bumping
+   * {@link generation}), so a long session that has seen many distinct glyphs
+   * (CJK, emoji, box drawing) keeps rendering instead of dropping new ones.
+   * Returns null only if the slot geometry is degenerate (zero capacity).
+   */
   get(codepoint: number, bold: boolean, italic: boolean): GlyphSlot | null {
     const key = codepoint | (bold ? 1 << 24 : 0) | (italic ? 1 << 25 : 0);
     const hit = this.slots.get(key);
     if (hit) return hit;
-    if (this.next >= this.capacity) {
-      console.warn("[atlas] full — dropping glyph", codepoint);
-      return null;
-    }
+    if (this.capacity <= 0) return null;
+    if (this.next >= this.capacity) this.reset(); // evict all; the caller re-builds
 
     const i = this.next++;
     const col = i % this.cols;

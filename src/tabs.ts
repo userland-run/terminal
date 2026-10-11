@@ -2,7 +2,7 @@
 // Copyright (C) 2026 And The Next GmbH - https://userland.run
 // Part of the userland.run terminal; dual-licensed - see LICENSE.md.
 
-import { qs, qsa } from "./dom";
+import type { DomScope } from "./dom";
 
 export type TabName = "terminal" | "editor" | "preview";
 
@@ -21,8 +21,11 @@ export interface TabsOptions {
 export class Tabs {
   private active: TabName = "terminal";
 
-  constructor(private readonly opts: TabsOptions = {}) {
-    for (const btn of qsa<HTMLElement>(".tab")) {
+  constructor(
+    private readonly dom: DomScope,
+    private readonly opts: TabsOptions = {},
+  ) {
+    for (const btn of dom.qsa<HTMLElement>(".tab")) {
       btn.addEventListener("click", (e) => {
         const closeEl = (e.target as HTMLElement).closest<HTMLElement>(".tab-close");
         if (closeEl) {
@@ -44,12 +47,15 @@ export class Tabs {
   /** Activate a tab, showing its pane and hiding the others. */
   show(tab: TabName): void {
     this.active = tab;
-    for (const b of qsa<HTMLElement>(".tab")) {
+    for (const b of this.dom.qsa<HTMLElement>(".tab")) {
       const on = b.dataset.tab === tab;
       b.classList.toggle("active", on);
-      b.setAttribute("aria-selected", String(on));
+      // A closable tab is a group (tab button + close button); aria-selected
+      // belongs on its role=tab element.
+      const roleTab = b.matches('[role="tab"]') ? b : b.querySelector<HTMLElement>('[role="tab"]');
+      roleTab?.setAttribute("aria-selected", String(on));
     }
-    for (const p of qsa<HTMLElement>(".tab-pane")) {
+    for (const p of this.dom.qsa<HTMLElement>(".tab-pane")) {
       p.classList.toggle("active", p.dataset.tab === tab);
     }
     this.opts.onSwitch?.(tab);
@@ -57,20 +63,20 @@ export class Tabs {
 
   /** Un-hide a tab button (Editor/Preview appear on demand). */
   reveal(tab: TabName): void {
-    const b = qs<HTMLElement>(`.tab[data-tab="${tab}"]`);
+    const b = this.dom.qs<HTMLElement>(`.tab[data-tab="${tab}"]`);
     if (b) b.hidden = false;
   }
 
   /** Hide a tab button and fall back to the Terminal tab if it was active. */
   hide(tab: TabName): void {
-    const b = qs<HTMLElement>(`.tab[data-tab="${tab}"]`);
+    const b = this.dom.qs<HTMLElement>(`.tab[data-tab="${tab}"]`);
     if (b) b.hidden = true;
     if (this.active === tab) this.show("terminal");
   }
 
   /** Set the Editor tab's label to the open file's basename. */
   setEditorLabel(text: string): void {
-    const label = qs<HTMLElement>('.tab[data-tab="editor"] .tab-label');
+    const label = this.dom.qs<HTMLElement>('.tab[data-tab="editor"] .tab-label');
     if (label) label.textContent = text;
   }
 }

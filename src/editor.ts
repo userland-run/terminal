@@ -93,18 +93,33 @@ export interface EditorTabHost {
   localMounts?: LocalMounts;
   /** Reveal + activate the Editor tab and set its label. */
   reveal: (label: string) => void;
+  /** Update the Editor tab's label in place (dirty marker, rename). */
+  setLabel?: (label: string) => void;
   /** Surface a short status (footer), e.g. "saved → disk". */
   setStatus?: (text: string) => void;
+  /** Ask the user to confirm discarding unsaved edits. Default: window.confirm. */
+  confirmDiscard?: (path: string) => boolean;
+}
+
+/** Why a file can't be opened in the editor, or null if it can. */
+export function unopenableReason(text: string | null): string | null {
+  if (text === null) return "not found or not a regular file";
+  // readFileString decodes lossily (invalid UTF-8 → U+FFFD), so a NUL byte or a
+  // replacement char means binary / non-UTF-8 content. Editing + saving it would
+  // write the lossy decode back and corrupt the file.
+  if (text.includes("\u0000") || text.includes("\uFFFD")) return "binary or not valid UTF-8";
+  return null;
 }
 
 /**
  * The Editor tab. Opens a guest file in CodeMirror; ⌘S/Ctrl-S writes it back to
  * the VFS (and, if the file is mapped from disk via the File System Access API,
- * to the local file too).
+ * to the local file too). Tracks unsaved edits and asks before discarding them.
  */
 export class EditorTab {
   private view: EditorView | null = null;
   private currentPath: string | null = null;
+  private dirty = false;
 
   constructor(private readonly o: EditorTabHost) {}
 
@@ -112,18 +127,42 @@ export class EditorTab {
     return this.currentPath;
   }
 
-  open(path: string): void {
-    const content = this.o.vm.readFileString(path) ?? "";
+  get isDirty(): boolean {
+    return this.dirty;
+  }
+
+  /**
+   * Open `path`. Returns false (and leaves the current document untouched) if
+   * the file is missing/binary, or the user declined to discard unsaved edits.
+   */
+  open(path: string): boolean {
+    if (path === this.currentPath && this.view) {
+      this.o.reveal(this.label());
+      this.view.focus();
+      return true;
+    }
+    const content = this.o.vm.readFileString(path);
+    const why = unopenableReason(content);
+    if (why) {
+      // Never open a missing/unreadable file as "" — a save would truncate it.
+      this.o.setStatus?.(`can't open ${basename(path)}: ${why}`);
+      return false;
+    }
+    if (!this.confirmDiscard()) return false;
     this.currentPath = path;
+    this.dirty = false;
     this.view?.destroy();
     this.view = new EditorView({
-      doc: content,
+      doc: content!,
       parent: this.o.host,
       extensions: [
         basicSetup,
         ...languageFor(path),
         syntaxHighlighting(terminalHighlight),
         terminalTheme,
+        EditorView.updateListener.of((u) => {
+          if (u.docChanged && !this.dirty) this.setDirty(true);
+        }),
         keymap.of([
           {
             key: "Mod-s",
@@ -136,15 +175,42 @@ export class EditorTab {
         ]),
       ],
     });
-    this.o.reveal(basename(path));
+    this.o.reveal(this.label());
     this.view.focus();
+    return true;
+  }
+
+  private label(): string {
+    const name = this.currentPath ? basename(this.currentPath) : "Editor";
+    return this.dirty ? `● ${name}` : name;
+  }
+
+  private setDirty(on: boolean): void {
+    this.dirty = on;
+    this.o.setLabel?.(this.label());
+  }
+
+  /** True if it's OK to drop the current document (clean, or the user agreed). */
+  private confirmDiscard(): boolean {
+    if (!this.dirty || !this.currentPath) return true;
+    const ask =
+      this.o.confirmDiscard ??
+      ((p: string) => window.confirm(`Discard unsaved changes to ${basename(p)}?`));
+    return ask(this.currentPath);
   }
 
   private async save(): Promise<void> {
     if (!this.view || !this.currentPath) return;
     const text = this.view.state.doc.toString();
     const path = this.currentPath;
-    this.o.vm.addFile(path, text); // sync MemFS write — guest sees it immediately
+    try {
+      this.o.vm.addFile(path, text); // sync MemFS write — guest sees it immediately
+    } catch (err) {
+      console.warn("[editor] save failed:", err);
+      this.o.setStatus?.("save failed");
+      return;
+    }
+    this.setDirty(false);
     if (this.o.localMounts?.isMapped(path)) {
       const ok = await this.o.localMounts.writeBack(path, text);
       this.o.setStatus?.(ok ? "saved → disk" : "saved (disk denied)");
@@ -153,9 +219,39 @@ export class EditorTab {
     }
   }
 
-  close(): void {
+  /**
+   * The open file (or a directory containing it) was renamed in the Files panel:
+   * follow it so a later save goes to the new path, not a resurrected old one.
+   */
+  renamed(from: string, to: string): void {
+    const cur = this.currentPath;
+    if (!cur) return;
+    if (cur === from) this.currentPath = to;
+    else if (cur.startsWith(from + "/")) this.currentPath = to + cur.slice(from.length);
+    else return;
+    this.o.setLabel?.(this.label());
+  }
+
+  /**
+   * `path` (or a directory containing the open file) was deleted. Returns true if
+   * the open document was affected; it's kept (so edits aren't lost) but marked
+   * dirty, so the user can save it back or discard it.
+   */
+  deleted(path: string): boolean {
+    const cur = this.currentPath;
+    if (!cur || (cur !== path && !cur.startsWith(path + "/"))) return false;
+    this.setDirty(true);
+    this.o.setStatus?.(`${basename(cur)} was deleted — save to restore it`);
+    return true;
+  }
+
+  /** Close the document. Returns false if the user kept unsaved edits. */
+  close(force = false): boolean {
+    if (!force && !this.confirmDiscard()) return false;
     this.view?.destroy();
     this.view = null;
     this.currentPath = null;
+    this.dirty = false;
+    return true;
   }
 }

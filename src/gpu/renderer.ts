@@ -3,21 +3,28 @@
 // Part of the userland.run terminal; dual-licensed - see LICENSE.md.
 
 import type { TermSnapshot } from "@container/nanovm.mjs";
-import { THEME, THEME_RGB, ansiRgb, hexToRgb, type Rgb } from "../palette";
-import type { TermRenderer } from "../renderer";
+import { THEME, THEME_RGB, ansiRgb, type Rgb } from "../palette";
+import { currentDpr, watchDevicePixelRatio, type TermRenderer } from "../renderer";
 import type { Selection } from "../selection";
 import { ordered } from "../selection";
+import {
+  CELL_BYTES,
+  CELL_BG,
+  CELL_FG,
+  CELL_FLAGS,
+  FLAG_BG_DEFAULT,
+  FLAG_BOLD,
+  FLAG_DIM,
+  FLAG_FG_DEFAULT,
+  FLAG_INVERSE,
+  FLAG_ITALIC,
+  FLAG_UNDERLINE,
+  cellCodepoint,
+  cellView,
+  isInk,
+} from "../cells";
 import { requestGpu } from "./device";
 import { GlyphAtlas } from "./atlas";
-
-// Cell flag bits — must match src/term.rs in the nano repo (mirror of renderer.ts).
-const FLAG_BOLD = 1 << 0;
-const FLAG_DIM = 1 << 1;
-const FLAG_ITALIC = 1 << 2;
-const FLAG_UNDERLINE = 1 << 3;
-const FLAG_INVERSE = 1 << 4;
-const FLAG_FG_DEFAULT = 1 << 5;
-const FLAG_BG_DEFAULT = 1 << 6;
 
 // Each instance is 8 floats: two vec2 + one vec4.
 const FLOATS_PER_INSTANCE = 8;
@@ -92,9 +99,7 @@ const BLEND: GPUBlendState = {
   alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
 };
 
-// Selection highlight — the comp's ::selection violet rgba(169,132,245,.32)
-// composited over the terminal surface (#15151a).
-const SELECTION_RGB = hexToRgb("#443960");
+const SELECTION_RGB = THEME_RGB.selection;
 
 function sameRgb(a: Rgb | null, b: Rgb | null): boolean {
   if (a === b) return true;
@@ -107,7 +112,8 @@ export class GpuRenderer implements TermRenderer {
   cellW = 0;
   cellH = 0;
 
-  private dpr = Math.max(1, window.devicePixelRatio || 1);
+  private dpr = currentDpr();
+  private unwatchDpr: () => void = () => {};
   private cellWdev = 0;
   private cellHdev = 0;
   private cols = 0;
@@ -174,6 +180,14 @@ export class GpuRenderer implements TermRenderer {
 
     this.buildPipelines();
     this.measure();
+    // Zoom / moving to a monitor with another scale changes the DPR: re-measure
+    // (device-px cell size + atlas raster size) and resize the surface, else the
+    // grid renders blurry or at the wrong physical size.
+    this.unwatchDpr = watchDevicePixelRatio((dpr) => {
+      this.dpr = dpr;
+      this.measure();
+      if (this.cols && this.rows) this.resize(this.cols, this.rows);
+    });
   }
 
   // --- pipeline / bind-group construction -----------------------------------
@@ -323,7 +337,11 @@ export class GpuRenderer implements TermRenderer {
     this.lastHash = hash;
     this.lastCursorOn = cursorOn;
 
-    const { rectCount, glyphCount } = this.buildInstances(s, cursorOn);
+    // If the atlas filled up and evicted mid-build, slots handed out earlier in
+    // this frame are stale — rebuild once against the fresh atlas.
+    const gen = this.atlas.generation;
+    let { rectCount, glyphCount } = this.buildInstances(s, cursorOn);
+    if (this.atlas.generation !== gen) ({ rectCount, glyphCount } = this.buildInstances(s, cursorOn));
 
     const q = this.device.queue;
     this.atlas.uploadIfDirty(q);
@@ -361,7 +379,7 @@ export class GpuRenderer implements TermRenderer {
 
   /** Build background/underline/cursor rects and glyph quads for one frame. */
   private buildInstances(s: TermSnapshot, cursorOn: boolean): { rectCount: number; glyphCount: number } {
-    const dv = new DataView(s.cells.buffer, s.cells.byteOffset, s.cells.byteLength);
+    const dv = cellView(s);
     const cells = s.cells;
     const { cellWdev, cellHdev, cols, rows } = this;
     const rect = this.rectData;
@@ -377,7 +395,7 @@ export class GpuRenderer implements TermRenderer {
       let runRgb: Rgb | null = null;
       let runStart = -1;
       for (let c = 0; c < cols; c++) {
-        const bg = this.cellBg(dv, cells, r * cols + c);
+        const bg = this.cellBg(cells, r * cols + c);
         if (!sameRgb(bg, runRgb)) {
           if (runRgb && runStart >= 0) {
             ri = pushRect(rect, ri, runStart * cellWdev, y, (c - runStart) * cellWdev, cellHdev, runRgb, 1);
@@ -393,12 +411,12 @@ export class GpuRenderer implements TermRenderer {
       // Glyphs + underline.
       for (let c = 0; c < cols; c++) {
         if (showCursor && r === s.cursorRow && c === s.cursorCol) continue; // drawn below
-        const o = (r * cols + c) * 8;
-        const ch = dv.getUint32(o, true);
-        const flags = cells[o + 6];
+        const o = (r * cols + c) * CELL_BYTES;
+        const ch = cellCodepoint(dv, r * cols + c);
+        const flags = cells[o + CELL_FLAGS];
         const fg = this.cellFg(cells, o, flags);
         const x = c * cellWdev;
-        if (ch && ch !== 0x20) {
+        if (isInk(ch)) {
           const slot = this.atlas.get(ch, !!(flags & FLAG_BOLD), !!(flags & FLAG_ITALIC));
           if (slot) gi = pushGlyph(glyph, gi, x, y, slot.u0, slot.v0, fg, flags & FLAG_DIM ? 0.6 : 1);
         }
@@ -433,10 +451,10 @@ export class GpuRenderer implements TermRenderer {
       const x = s.cursorCol * cellWdev;
       const y = s.cursorRow * cellHdev;
       ri = pushRect(rect, ri, x, y, cellWdev, cellHdev, THEME_RGB.cursor, 1);
-      const o = (s.cursorRow * cols + s.cursorCol) * 8;
-      const ch = dv.getUint32(o, true);
-      if (ch && ch !== 0x20) {
-        const flags = cells[o + 6];
+      const o = (s.cursorRow * cols + s.cursorCol) * CELL_BYTES;
+      const ch = cellCodepoint(dv, s.cursorRow * cols + s.cursorCol);
+      if (isInk(ch)) {
+        const flags = cells[o + CELL_FLAGS];
         const slot = this.atlas.get(ch, !!(flags & FLAG_BOLD), !!(flags & FLAG_ITALIC));
         if (slot) gi = pushGlyph(glyph, gi, x, y, slot.u0, slot.v0, THEME_RGB.bg, 1);
       }
@@ -446,26 +464,30 @@ export class GpuRenderer implements TermRenderer {
   }
 
   /** Effective background colour of a cell, or null for the ground colour. */
-  private cellBg(dv: DataView, cells: Uint8Array, idx: number): Rgb | null {
-    const o = idx * 8;
-    const flags = cells[o + 6];
+  private cellBg(cells: Uint8Array, idx: number): Rgb | null {
+    const o = idx * CELL_BYTES;
+    const flags = cells[o + CELL_FLAGS];
     if (flags & FLAG_INVERSE) {
       // Inverse: the foreground becomes the background (always a colour).
-      return flags & FLAG_FG_DEFAULT ? THEME_RGB.fg : ansiRgb(cells[o + 4]);
+      return flags & FLAG_FG_DEFAULT ? THEME_RGB.fg : ansiRgb(cells[o + CELL_FG]);
     }
-    return flags & FLAG_BG_DEFAULT ? null : ansiRgb(cells[o + 5]);
+    return flags & FLAG_BG_DEFAULT ? null : ansiRgb(cells[o + CELL_BG]);
   }
 
   /** Effective foreground (glyph) colour of a cell. */
   private cellFg(cells: Uint8Array, o: number, flags: number): Rgb {
     if (flags & FLAG_INVERSE) {
       // Inverse: old background (or ground) becomes the foreground.
-      return flags & FLAG_BG_DEFAULT ? THEME_RGB.bg : ansiRgb(cells[o + 5]);
+      return flags & FLAG_BG_DEFAULT ? THEME_RGB.bg : ansiRgb(cells[o + CELL_BG]);
     }
-    return flags & FLAG_FG_DEFAULT ? THEME_RGB.fg : ansiRgb(cells[o + 4]);
+    return flags & FLAG_FG_DEFAULT ? THEME_RGB.fg : ansiRgb(cells[o + CELL_FG]);
   }
 
-  /** FNV-1a over the cell bytes + cursor position — cheap damage signature. */
+  /**
+   * FNV-1a over the cell bytes + cursor position — damage signature. O(cells)
+   * per frame (~100 KB worst case), but termSnapshot already copies that much
+   * each frame; the VM exposes no damage/generation counter to key off instead.
+   */
   private hash(s: TermSnapshot): number {
     let h = 0x811c9dc5;
     const cells = s.cells;
@@ -479,6 +501,7 @@ export class GpuRenderer implements TermRenderer {
   }
 
   destroy() {
+    this.unwatchDpr();
     this.rectBuf?.destroy();
     this.glyphBuf?.destroy();
     this.uniformBuf.destroy();

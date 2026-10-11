@@ -4,6 +4,23 @@
 
 import { THEME, ansiColor } from "./palette";
 import type { TermSnapshot } from "@container/nanovm.mjs";
+import { ordered, type Selection } from "./selection";
+import {
+  CELL_BYTES,
+  CELL_BG,
+  CELL_FG,
+  CELL_FLAGS,
+  FLAG_BG_DEFAULT,
+  FLAG_BOLD,
+  FLAG_DIM,
+  FLAG_FG_DEFAULT,
+  FLAG_INVERSE,
+  FLAG_ITALIC,
+  FLAG_UNDERLINE,
+  cellCodepoint,
+  cellView,
+  isInk,
+} from "./cells";
 
 /**
  * The contract shared by every renderer backend (throwaway 2D canvas, WebGPU).
@@ -23,19 +40,37 @@ export interface TermRenderer {
   /** Paint one frame from a terminal snapshot; `cursorOn` is the blink phase. */
   draw(s: TermSnapshot, cursorOn: boolean): void;
   /** Set (or clear) the drag-selection highlight. Optional per backend. */
-  setSelection?(sel: import("./selection").Selection | null): void;
+  setSelection?(sel: Selection | null): void;
   /** Release GPU/native resources, if any. */
   destroy?(): void;
 }
 
-// Cell flag bits — must match src/term.rs in the nano repo.
-const FLAG_BOLD = 1 << 0;
-const FLAG_DIM = 1 << 1;
-const FLAG_ITALIC = 1 << 2;
-const FLAG_UNDERLINE = 1 << 3;
-const FLAG_INVERSE = 1 << 4;
-const FLAG_FG_DEFAULT = 1 << 5;
-const FLAG_BG_DEFAULT = 1 << 6;
+/**
+ * Call `onChange` whenever window.devicePixelRatio changes (browser zoom, or the
+ * window moving to a monitor with a different scale). A `resolution` media query
+ * only fires when leaving *its* value, so it's re-armed for the new DPR each time.
+ * Returns an unsubscribe.
+ */
+export function watchDevicePixelRatio(onChange: (dpr: number) => void): () => void {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
+  let mq: MediaQueryList | null = null;
+  const handler = () => {
+    arm();
+    onChange(currentDpr());
+  };
+  const arm = () => {
+    mq?.removeEventListener("change", handler);
+    mq = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    mq.addEventListener("change", handler);
+  };
+  arm();
+  return () => mq?.removeEventListener("change", handler);
+}
+
+/** The device pixel ratio, floored at 1. */
+export function currentDpr(): number {
+  return Math.max(1, window.devicePixelRatio || 1);
+}
 
 /**
  * Throwaway Phase-0 renderer: paints the cell grid to a 2D canvas. Replaced by
@@ -46,11 +81,20 @@ export class CanvasRenderer implements TermRenderer {
   private ctx: CanvasRenderingContext2D;
   cellW = 0;
   cellH = 0;
-  private dpr = Math.max(1, window.devicePixelRatio || 1);
+  private dpr = currentDpr();
+  private cols = 0;
+  private rows = 0;
+  private selection: Selection | null = null;
+  private readonly unwatchDpr: () => void;
 
   constructor(private canvas: HTMLCanvasElement, private fontSize = 15) {
     this.ctx = canvas.getContext("2d")!;
     this.measure();
+    // Re-rasterise at the new DPR on zoom / monitor change (else it goes blurry).
+    this.unwatchDpr = watchDevicePixelRatio((dpr) => {
+      this.dpr = dpr;
+      if (this.cols && this.rows) this.resize(this.cols, this.rows);
+    });
   }
 
   /** Measure monospace cell metrics for the current font size. */
@@ -65,7 +109,13 @@ export class CanvasRenderer implements TermRenderer {
     this.measure();
   }
 
+  setSelection(sel: Selection | null) {
+    this.selection = sel; // full redraw every frame — picked up on the next draw
+  }
+
   resize(cols: number, rows: number) {
+    this.cols = cols;
+    this.rows = rows;
     const w = cols * this.cellW;
     const h = rows * this.cellH;
     this.canvas.width = Math.floor(w * this.dpr);
@@ -78,20 +128,25 @@ export class CanvasRenderer implements TermRenderer {
 
   draw(s: TermSnapshot, cursorOn: boolean) {
     const ctx = this.ctx;
-    const dv = new DataView(s.cells.buffer, s.cells.byteOffset, s.cells.byteLength);
+    const cells = s.cells;
+    const dv = cellView(s);
     ctx.textBaseline = "top";
 
     ctx.fillStyle = THEME.bg;
     ctx.fillRect(0, 0, s.cols * this.cellW, s.rows * this.cellH);
 
+    // Selection highlight replaces the selected cells' background; glyphs still
+    // draw on top, so selected text stays readable.
+    const selRows = this.selectionRows(s.cols, s.rows);
+
     const glyphY = (this.cellH - this.fontSize) / 2;
     for (let r = 0; r < s.rows; r++) {
       for (let c = 0; c < s.cols; c++) {
-        const o = (r * s.cols + c) * 8;
-        const ch = dv.getUint32(o, true);
-        const fg = dv.getUint8(o + 4);
-        const bg = dv.getUint8(o + 5);
-        const flags = dv.getUint8(o + 6);
+        const o = (r * s.cols + c) * CELL_BYTES;
+        const ch = cellCodepoint(dv, r * s.cols + c);
+        const fg = cells[o + CELL_FG];
+        const bg = cells[o + CELL_BG];
+        const flags = cells[o + CELL_FLAGS];
 
         let fgCol = flags & FLAG_FG_DEFAULT ? THEME.fg : ansiColor(fg);
         let bgCol: string | null = flags & FLAG_BG_DEFAULT ? null : ansiColor(bg);
@@ -100,6 +155,8 @@ export class CanvasRenderer implements TermRenderer {
           bgCol = fgCol;
           fgCol = t;
         }
+        const sel = selRows[r];
+        if (sel && c >= sel[0] && c <= sel[1]) bgCol = THEME.selection;
 
         const x = c * this.cellW;
         const y = r * this.cellH;
@@ -107,7 +164,7 @@ export class CanvasRenderer implements TermRenderer {
           ctx.fillStyle = bgCol;
           ctx.fillRect(x, y, this.cellW, this.cellH);
         }
-        if (ch && ch !== 0x20) {
+        if (isInk(ch)) {
           const weight = flags & FLAG_BOLD ? "700" : "400";
           const italic = flags & FLAG_ITALIC ? "italic " : "";
           ctx.font = `${italic}${weight} ${this.fontSize}px ${THEME.font}`;
@@ -120,20 +177,34 @@ export class CanvasRenderer implements TermRenderer {
       }
     }
 
-    if (cursorOn) {
+    if (cursorOn && s.cursorRow >= 0) {
       const x = s.cursorCol * this.cellW;
       const y = s.cursorRow * this.cellH;
       ctx.fillStyle = THEME.cursor;
       ctx.globalAlpha = 0.85;
       ctx.fillRect(x, y, this.cellW, this.cellH);
       ctx.globalAlpha = 1;
-      const o = (s.cursorRow * s.cols + s.cursorCol) * 8;
-      const ch = dv.getUint32(o, true);
-      if (ch && ch !== 0x20) {
+      const ch = cellCodepoint(dv, s.cursorRow * s.cols + s.cursorCol);
+      if (isInk(ch)) {
         ctx.fillStyle = THEME.bg;
         ctx.font = `${this.fontSize}px ${THEME.font}`;
         ctx.fillText(String.fromCodePoint(ch), x, y + glyphY);
       }
     }
+  }
+
+  /** Per-row [startCol, endCol] of the selection (inclusive), or undefined. */
+  private selectionRows(cols: number, rows: number): ([number, number] | undefined)[] {
+    const out: ([number, number] | undefined)[] = new Array(rows);
+    if (!this.selection) return out;
+    const { start, end } = ordered(this.selection);
+    for (let row = Math.max(0, start.row); row <= Math.min(rows - 1, end.row); row++) {
+      out[row] = [row === start.row ? start.col : 0, row === end.row ? end.col : cols - 1];
+    }
+    return out;
+  }
+
+  destroy() {
+    this.unwatchDpr();
   }
 }

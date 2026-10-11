@@ -118,7 +118,7 @@ cargo build --release --no-default-features --features busybox --target wasm32-u
 cp target/wasm32-unknown-unknown/release/nanovm.wasm ../terminal/public/nano.wasm
 # (or grab a prebuilt nano.busybox.wasm from a nano release and save it as public/nano.wasm)
 
-# 2. Run the dev server (sends COOP/COEP headers; @container resolves to ../nano/container):
+# 2. Run the dev server (sends COOP/COEP headers; @container resolves to ../nano/runners/riscv/host):
 cd ../terminal
 npm install
 npm run dev
