@@ -9,7 +9,10 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["@webgpu/types"],
     // Typed view of the SDK's agent subpath (vite aliases it to the built bundle).
-    "paths": { "@sdk/agent": ["../sdk/src/agent/index.ts"] }
+    "paths": {
+      "@sdk/agent": ["../sdk/src/agent/index.ts"],
+      "@sdk/folder": ["../sdk/src/folder/index.ts"]
+    }
   },
   "include": ["src"]
 }

@@ -138,3 +138,57 @@ test(
     await expect(overlay).toBeHidden();
   },
 );
+
+test(
+  "Map local folder mounts at /work and Save to folder writes every change back",
+  { tag: ["@feat:terminal.files.localfs"] },
+  async ({ page }) => {
+    // Stand in for the user's picked folder with an OPFS directory (Chromium
+    // supports createWritable on it, and it reports readwrite as granted).
+    await page.addInitScript(() => {
+      (window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker =
+        async () => {
+          const root = await navigator.storage.getDirectory();
+          await root.removeEntry("proj", { recursive: true }).catch(() => {});
+          const dir = await root.getDirectoryHandle("proj", { create: true });
+          const put = async (d: FileSystemDirectoryHandle, name: string, text: string) => {
+            const w = await (await d.getFileHandle(name, { create: true })).createWritable();
+            await w.write(text);
+            await w.close();
+          };
+          await put(dir, "a.txt", "original\n");
+          await put(dir, "keep.txt", "keep\n");
+          await put(await dir.getDirectoryHandle("sub", { create: true }), "s.txt", "s\n");
+          return dir;
+        };
+    });
+    const mirror = await bootShell(page);
+    await page.locator('.activity-btn[data-view="files"]').click();
+    await page.getByRole("button", { name: "Map local folder…" }).click();
+    const save = page.getByRole("button", { name: "Save to folder" });
+    await expect(save).toBeVisible();
+
+    await typeCommand(
+      page,
+      "cd /work/proj 2>/dev/null || cd /work; cat sub/s.txt >/dev/null && echo edited > a.txt && echo fresh > sub/new.txt && rm keep.txt && echo MAP-$((40+2))",
+    );
+    await expect(mirror).toContainText("MAP-42");
+    await save.click();
+
+    const readBack = () =>
+      page.evaluate(async () => {
+        const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle("proj");
+        const text = async (d: FileSystemDirectoryHandle, n: string) =>
+          d.getFileHandle(n).then((h) => h.getFile()).then((f) => f.text(), () => null);
+        const sub = await dir.getDirectoryHandle("sub");
+        return {
+          a: await text(dir, "a.txt"),
+          keep: await text(dir, "keep.txt"),
+          s: await text(sub, "s.txt"),
+          n: await text(sub, "new.txt"),
+        };
+      });
+    // Changed and new files are written; a file deleted in the VM stays on disk.
+    await expect.poll(readBack).toEqual({ a: "edited\n", keep: "keep\n", s: "s\n", n: "fresh\n" });
+  },
+);

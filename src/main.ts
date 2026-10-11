@@ -255,6 +255,7 @@ export async function mountTerminal(
       // Keep the open editor document pointed at the right path.
       onRenamed: (from, to) => editor?.renamed(from, to),
       onDeleted: (path) => void editor?.deleted(path),
+      onStatus: (s) => chrome.flashStatus(s, 2400),
     });
     files.mount(byId("files")!);
   } else {

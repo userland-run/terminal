@@ -212,8 +212,15 @@ export class EditorTab {
     }
     this.setDirty(false);
     if (this.o.localMounts?.isMapped(path)) {
-      const ok = await this.o.localMounts.writeBack(path, text);
-      this.o.setStatus?.(ok ? "saved → disk" : "saved (disk denied)");
+      // Inside a mapped folder this writes every changed file, not just this one.
+      const r = await this.o.localMounts.writeBack(path, text);
+      this.o.setStatus?.(
+        !r.ok
+          ? "saved (disk write failed)"
+          : r.written > 1
+            ? `saved → disk (${r.written} files)`
+            : "saved → disk",
+      );
     } else {
       this.o.setStatus?.("saved");
     }

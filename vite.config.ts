@@ -21,6 +21,7 @@ export default defineConfig({
       "@container": fileURLToPath(new URL("../nano/runners/riscv/host", import.meta.url)),
       // The agent subpath must precede "@sdk" so it isn't read as a prefix match.
       "@sdk/agent": fileURLToPath(new URL("../sdk/dist/agent.js", import.meta.url)),
+      "@sdk/folder": fileURLToPath(new URL("../sdk/dist/folder.js", import.meta.url)),
       "@sdk": fileURLToPath(new URL("../sdk/dist/index.js", import.meta.url)),
     },
   },

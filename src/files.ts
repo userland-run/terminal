@@ -15,6 +15,8 @@ export interface FilesPanelOptions {
   onRenamed?: (from: string, to: string) => void;
   /** A path (file or directory) was deleted. */
   onDeleted?: (path: string) => void;
+  /** Short transient status (e.g. the result of "Save to folder"). */
+  onStatus?: (text: string) => void;
 }
 
 const joinPath = (dir: string, name: string): string =>
@@ -41,6 +43,7 @@ export class FilesPanel {
   private selected: string | null = null;
   private pendingDelete: string | null = null;
   private deleteTimer = 0;
+  private saveBtn: HTMLButtonElement | null = null;
 
   constructor(
     private readonly vm: NanoVM,
@@ -64,10 +67,13 @@ export class FilesPanel {
     if (this.opts.localMounts && isFileSystemAccessSupported()) {
       const spacer = document.createElement("span");
       spacer.className = "files-tool-gap";
+      this.saveBtn = this.toolBtn("Save to folder", I.saveFolder, () => void this.saveToFolder());
+      this.saveBtn.hidden = !this.opts.localMounts.hasFolders;
       toolbar.append(
         spacer,
         this.toolBtn("Map local file…", I.mapFile, () => this.mapLocal("file")),
         this.toolBtn("Map local folder…", I.mapFolder, () => this.mapLocal("dir")),
+        this.saveBtn,
       );
     }
 
@@ -182,7 +188,8 @@ export class FilesPanel {
     if (!mounts) return;
     try {
       const path = kind === "dir" ? await mounts.mountDirectory() : await mounts.openFile();
-      // Reveal the mount: expand /mnt and (for a folder) the mounted dir itself.
+      if (this.saveBtn) this.saveBtn.hidden = !mounts.hasFolders;
+      // Reveal the mount: expand its parent and (for a folder) the mounted dir itself.
       const parent = path.slice(0, path.lastIndexOf("/")) || "/";
       this.expanded.add(parent);
       if (kind === "dir") this.expanded.add(path);
@@ -197,6 +204,22 @@ export class FilesPanel {
         console.warn("[files] local map failed:", err);
       }
     }
+  }
+
+  /** Write every file added or changed in a mapped folder back to disk. */
+  private async saveToFolder(): Promise<void> {
+    const mounts = this.opts.localMounts;
+    if (!mounts) return;
+    const r = await mounts.saveAll();
+    this.opts.onStatus?.(
+      r.unmapped
+        ? "no mapped folder"
+        : !r.ok
+          ? `save failed (${r.written} written, ${r.failed} failed)`
+          : r.written
+            ? `saved ${r.written} file${r.written === 1 ? "" : "s"} → folder`
+            : "folder up to date",
+    );
   }
 
   // --- create (inline input) ---
